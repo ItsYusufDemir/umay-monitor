@@ -12,33 +12,51 @@ read -p "Select [1/2]: " MODE
 
 if [[ "$MODE" == "1" ]]; then
     # --- Localhost Mode ---
-    # React connects directly to the container via HTTP
     FULL_API_URL="http://localhost:5123"
+    DASHBOARD_URL="http://localhost:3000"
     
     echo ""
     echo "-> Mode: Localhost"
-    echo "-> Frontend will talk to: ${FULL_API_URL}"
 
 else
     # --- Domain Mode ---
-    read -p "Enter your Domain (e.g. example.com): " USER_DOMAIN
+    echo ""
+    echo "--- Dashboard Configuration ---"
+    read -p "Enter the Domain for the DASHBOARD (e.g. monitor.example.com): " USER_DASH_INPUT
     
-    # Clean input (remove http/https and trailing slashes)
-    CLEAN_DOMAIN="${USER_DOMAIN#http://}"
-    CLEAN_DOMAIN="${CLEAN_DOMAIN#https://}"
-    CLEAN_DOMAIN="${CLEAN_DOMAIN%/}"
-
-    # React connects to the HTTPS SUBDOMAIN
-    FULL_API_URL="https://api.${CLEAN_DOMAIN}"
+    # Clean input
+    CLEAN_DASH="${USER_DASH_INPUT#http://}"
+    CLEAN_DASH="${CLEAN_DASH#https://}"
+    CLEAN_DASH="${CLEAN_DASH%/}"
 
     echo ""
-    echo "-> Mode: Domain (${CLEAN_DOMAIN})"
-    echo "-> Frontend will talk to: ${FULL_API_URL}"
+    echo "--- API Configuration ---"
+    # Smart default: api. + the dashboard domain
+    DEFAULT_API="api.${CLEAN_DASH}"
+    
+    echo "The standard API domain is: ${DEFAULT_API}"
+    read -p "Press ENTER to use this, or type a custom API domain: " CUSTOM_API_INPUT
+
+    if [[ -z "$CUSTOM_API_INPUT" ]]; then
+        FINAL_API_DOMAIN="${DEFAULT_API}"
+    else
+        FINAL_API_DOMAIN="${CUSTOM_API_INPUT#http://}"
+        FINAL_API_DOMAIN="${FINAL_API_DOMAIN#https://}"
+        FINAL_API_DOMAIN="${FINAL_API_DOMAIN%/}"
+    fi
+
+    # HTTPS is assumed for domains
+    FULL_API_URL="https://${FINAL_API_DOMAIN}"
+    DASHBOARD_URL="https://${CLEAN_DASH}"
+
+    echo ""
+    echo "-> Mode: Domain"
+    echo "-> Dashboard: ${DASHBOARD_URL}"
+    echo "-> API:       ${FULL_API_URL}"
 fi
 
 echo ""
 echo "-> Building containers..."
-# Export the URL so Docker picks it up during build
 export UMAY_API_URL="${FULL_API_URL}"
 docker compose up -d --build
 
@@ -47,13 +65,13 @@ echo "✅ Umay Monitor Installed Successfully!"
 echo "------------------------------------------"
 
 if [[ "$MODE" == "1" ]]; then
-    echo "Access Dashboard: http://localhost:3000"
+    echo "Access Dashboard: ${DASHBOARD_URL}"
 else
     echo "⚠️  ACTION REQUIRED: Configure Nginx/Apache (SSL Termination)"
     echo ""
-    echo "1. Map 'https://${CLEAN_DOMAIN}'     -> http://localhost:3000"
-    echo "2. Map 'https://api.${CLEAN_DOMAIN}' -> http://localhost:5123"
+    echo "1. Map '${DASHBOARD_URL}' -> http://localhost:3000"
+    echo "2. Map '${FULL_API_URL}' -> http://localhost:5123"
     echo ""
-    echo "Once configured, access: https://${CLEAN_DOMAIN}"
+    echo "Once configured, access: ${DASHBOARD_URL}"
 fi
 echo "------------------------------------------"

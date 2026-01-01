@@ -58,6 +58,9 @@ fi
 echo ""
 echo "-> Building containers..."
 export UMAY_API_URL="${FULL_API_URL}"
+
+export UMAY_DASHBOARD_URL="${DASHBOARD_URL}
+
 docker compose up -d --build
 
 echo ""

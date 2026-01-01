@@ -24,6 +24,7 @@ services:
       ASPNETCORE_ENVIRONMENT: Production
       ASPNETCORE_URLS: http://+:80
       ConnectionStrings__DefaultConnection: "Server=db;Port=5432;Database=umay_db;Username=postgres;Password=umay_secure_pass;"
+      ALLOWED_ORIGINS: ${UMAY_DASHBOARD_URL}
     depends_on:
       db:
         condition: service_healthy

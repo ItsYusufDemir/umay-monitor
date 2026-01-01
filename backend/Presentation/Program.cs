@@ -132,25 +132,31 @@ builder.Services.AddSwaggerGen(options =>
 });
 builder.Services.AddServices(builder.Configuration);
 
+
+
+
+
+// 1. Get the domain from Docker (or default to localhost:3000)
+var allowedOrigin = Environment.GetEnvironmentVariable("ALLOWED_ORIGINS") ?? "http://localhost:3000";
+
 builder.Services.AddCors(options =>
 {
+    // Policy for Local Development (Visual Studio) - Allows Everything
     options.AddPolicy("DevelopmentPolicy", policy =>
     {
-        policy.SetIsOriginAllowed(_ => true) // Allow any origin in development
+        policy.SetIsOriginAllowed(_ => true) 
               .AllowAnyHeader()
               .AllowAnyMethod()
-              .AllowCredentials(); // Required for SignalR
+              .AllowCredentials();
     });
 
+    // Policy for Production (Docker) - Strict, uses the Env Variable
     options.AddPolicy("ProductionPolicy", policy =>
     {
-        policy.WithOrigins(
-                "https://yourdomain.com",
-                "https://www.yourdomain.com"
-              )
+        policy.WithOrigins(allowedOrigin) // <--- Dynamic!
               .AllowAnyHeader()
               .AllowAnyMethod()
-              .AllowCredentials(); // Required for SignalR
+              .AllowCredentials();
     });
 });
 

@@ -16,7 +16,7 @@ else
     echo "☁️ Detected Public Environment."
     # Always use ws:// - nginx/apache handles SSL termination
     DEB_URL="https://${DOMAIN}/downloads/super-agent_amd64.deb"
-    WS_URI="wss://${DOMAIN}:5123"
+    WS_URI="wss://${DOMAIN}"
 fi
 
 echo "🚀 Starting Super-Agent Installation..."

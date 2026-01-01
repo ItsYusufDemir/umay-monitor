@@ -1,0 +1,50 @@
+services:
+  # --- Umay Monitor Frontend ---
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # These will be set by the install.sh script based on user selection
+        REACT_APP_API_BASE_URL: ${UMAY_API_URL}
+        REACT_APP_SIGNALR_HUB_URL: ${UMAY_API_URL}/monitoring-hub
+        REACT_APP_TITLE: "Umay Monitor"
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+    restart: always
+
+  # --- Umay Monitor Backend ---
+  api:
+    build:
+      context: ./backend
+    ports:
+      - "5123:80"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:80
+      ConnectionStrings__DefaultConnection: "Server=db;Port=5432;Database=umay_db;Username=postgres;Password=umay_secure_pass;"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: always
+
+  # --- Database ---
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: umay_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: umay_secure_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d umay_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  pgdata:

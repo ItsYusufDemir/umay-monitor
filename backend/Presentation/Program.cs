@@ -161,28 +161,13 @@ builder.Services.AddCors(options =>
               .AllowCredentials();
     });
 
-    // Policy for Production (Docker) - Strict, uses the Env Variable
+    // Policy for Production (Docker) - Allowing everything for testing
     options.AddPolicy("ProductionPolicy", policy =>
     {
-        policy.SetIsOriginAllowed(origin => 
-        {
-            // [DIAGNOSTIC] Print what is happening to logs
-            Console.WriteLine($"[CORS] Checking: Browser='{origin}' vs Env='{allowedOrigin}'");
-
-            // 1. Allow if exact match
-            if (origin == allowedOrigin) return true;
-
-            // 2. Allow if match ignoring trailing slashes (The likely fix)
-            var cleanOrigin = origin.TrimEnd('/');
-            var cleanAllowed = allowedOrigin.TrimEnd('/');
-            
-            if (cleanOrigin.Equals(cleanAllowed, StringComparison.OrdinalIgnoreCase)) return true;
-
-            return false;
-        })
-        .AllowAnyHeader()
-        .AllowAnyMethod()
-        .AllowCredentials();
+        policy.SetIsOriginAllowed(_ => true)
+              .AllowAnyHeader()
+              .AllowAnyMethod()
+              .AllowCredentials();
     });
 });
 

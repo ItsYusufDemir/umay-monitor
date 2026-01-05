@@ -44,6 +44,7 @@ const ProcessList = ({
   watchedProcesses,
   onToggleWatch,
   watchBusy,
+  processCmdlines,
 }) => {
   const [q, setQ] = useState('');
   const [statusFilter, setStatusFilter] = useState('all'); // all | running | sleeping | stopped | idle | other
@@ -180,20 +181,27 @@ const ProcessList = ({
   }, [filtered, sortKey, sortDir]);
 
   const renderRow = (p) => {
-    const cmdKey = String(p?.cmdline || '').trim();
+    // Use cmdline from processCmdlines (fetched from detail API) for accurate watched status
+    const detailCmdline = processCmdlines?.[p.pid] || '';
+    const cmdKey = String(detailCmdline || p?.cmdline || '').trim();
     const nameKey = String(p?.name || '').trim();
     const key = cmdKey || nameKey;
     const isWatched = Boolean(
-      watchedProcesses?.has?.(key) || (nameKey && watchedProcesses?.has?.(nameKey))
+      watchedProcesses?.has?.(cmdKey) || 
+      watchedProcesses?.has?.(key) || 
+      (nameKey && watchedProcesses?.has?.(nameKey))
     );
-    const toggleKey = watchedProcesses?.has?.(key)
-      ? key
-      : nameKey && watchedProcesses?.has?.(nameKey)
-        ? nameKey
-        : key;
+    const toggleKey = watchedProcesses?.has?.(cmdKey)
+      ? cmdKey
+      : watchedProcesses?.has?.(key)
+        ? key
+        : nameKey && watchedProcesses?.has?.(nameKey)
+          ? nameKey
+          : cmdKey || key;
     const isBusy = Boolean(
       watchBusy?.[toggleKey] ||
         (key && watchBusy?.[key]) ||
+        (cmdKey && watchBusy?.[cmdKey]) ||
         (nameKey && watchBusy?.[nameKey]) ||
         watchBusy?.[`proc:${toggleKey}`] ||
         (key && watchBusy?.[`proc:${key}`]) ||
@@ -206,7 +214,7 @@ const ProcessList = ({
         onClick={() => onSelectPid?.(p.pid)}
         className={Number(p.pid) === Number(selectedPid) ? 'row-selected' : ''}
         style={{ cursor: 'pointer' }}
-        title={p?.cmdline || ''}
+        title={detailCmdline || p?.cmdline || ''}
       >
         <td>{p.pid}</td>
         <td title={p.name}>{p.name}</td>
@@ -220,7 +228,7 @@ const ProcessList = ({
               onClick={(e) => {
                 e.stopPropagation();
                 if (!toggleKey) return;
-                onToggleWatch(toggleKey);
+                onToggleWatch(toggleKey, p.pid);
               }}
               title={isWatched ? 'Remove from watchlist' : 'Add to watchlist'}
             >

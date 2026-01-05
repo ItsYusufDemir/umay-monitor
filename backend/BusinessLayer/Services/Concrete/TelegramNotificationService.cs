@@ -1,4 +1,4 @@
-using BusinessLayer.Services.Interfaces;
+﻿using BusinessLayer.Services.Interfaces;
 using Infrastructure;
 using Infrastructure.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -50,80 +50,76 @@ public class TelegramNotificationService : ITelegramNotificationService
 
             var botClient = new TelegramBotClient(settings.TelegramBotToken);
 
-            // Get server name and alert rule details for better context
             var server = await _dbContext.MonitoredServers.FindAsync(alert.MonitoredServerId);
             var serverName = server?.Name ?? $"Server {alert.MonitoredServerId}";
 
-            var alertRule = alert.AlertRuleId.HasValue 
-                ? await _dbContext.AlertRules.FindAsync(alert.AlertRuleId.Value) 
+            var alertRule = alert.AlertRuleId.HasValue
+                ? await _dbContext.AlertRules.FindAsync(alert.AlertRuleId.Value)
                 : null;
 
-            // Format message with emoji and HTML formatting (better emoji support than Markdown)
+            // Severity emojis
             string severityEmoji = alert.Severity.ToLower() switch
             {
-                "critical" => "??",
-                "warning" => "??",
-                "info" => "??",
-                _ => "??"
+                "critical" => "🚨🔥",
+                "warning" => "⚠️",
+                "info" => "ℹ️",
+                _ => "🔔"
             };
 
             string targetTypeEmoji = "";
             string targetTypeName = "";
-            
+
             if (alertRule != null)
             {
                 (targetTypeEmoji, targetTypeName) = alertRule.TargetType switch
                 {
-                    AlertTargetType.Server => ("???", "Server"),
-                    AlertTargetType.Disk => ("??", "Disk"),
-                    AlertTargetType.Network => ("??", "Network"),
-                    AlertTargetType.Process => ("??", "Process"),
-                    AlertTargetType.Service => ("??", "Service"),
-                    _ => ("??", "Unknown")
+                    AlertTargetType.Server => ("🖥️", "Server"),
+                    AlertTargetType.Disk => ("💾", "Disk"),
+                    AlertTargetType.Network => ("🌐", "Network"),
+                    AlertTargetType.Process => ("⚙️", "Process"),
+                    AlertTargetType.Service => ("🧩", "Service"),
+                    _ => ("❓", "Unknown")
                 };
             }
 
-            // Build the message with HTML formatting
             var messageBuilder = new System.Text.StringBuilder();
-            
-            // Header with severity
+
+            // Header
             messageBuilder.AppendLine($"{severityEmoji} <b>{alert.Severity.ToUpper()} ALERT</b>");
-            messageBuilder.AppendLine("??????????????????????");
+            messageBuilder.AppendLine("━━━━━━━━━━━━━━━━━━━━━━");
             messageBuilder.AppendLine();
-            
-            // Server information
-            messageBuilder.AppendLine($"??? <b>Server:</b> {serverName}");
-            
-            // Target type if available
+
+            // Server info
+            messageBuilder.AppendLine($"🖥️ <b>Server:</b> {serverName}");
+
+            // Target info
             if (!string.IsNullOrEmpty(targetTypeName))
             {
                 messageBuilder.AppendLine($"{targetTypeEmoji} <b>Type:</b> {targetTypeName}");
-                
-                // Target ID if available
+
                 if (alertRule != null && !string.IsNullOrEmpty(alertRule.TargetId))
                 {
-                    messageBuilder.AppendLine($"?? <b>Target:</b> <code>{alertRule.TargetId}</code>");
+                    messageBuilder.AppendLine($"🆔 <b>Target:</b> <code>{alertRule.TargetId}</code>");
                 }
             }
-            
+
             messageBuilder.AppendLine();
-            
+
             // Alert details
-            messageBuilder.AppendLine($"?? <b>Alert:</b> {alert.Title.Replace("Alert: ", "")}");
-            messageBuilder.AppendLine($"?? <b>Details:</b> {alert.Message}");
-            
+            messageBuilder.AppendLine($"📌 <b>Alert:</b> {alert.Title.Replace("Alert: ", "")}");
+            messageBuilder.AppendLine($"📝 <b>Details:</b> {alert.Message}");
+
             // Timestamp
             messageBuilder.AppendLine();
-            messageBuilder.AppendLine($"?? <b>Time:</b> {alert.CreatedAtUtc:yyyy-MM-dd HH:mm:ss} UTC");
-            
+            messageBuilder.AppendLine($"⏰ <b>Time:</b> {alert.CreatedAtUtc:yyyy-MM-dd HH:mm:ss} UTC");
+
             // Footer
             messageBuilder.AppendLine();
-            messageBuilder.AppendLine("??????????????????????");
-            messageBuilder.AppendLine($"<i>Alert ID: #{alert.Id}</i>");
+            messageBuilder.AppendLine("━━━━━━━━━━━━━━━━━━━━━━");
+            messageBuilder.AppendLine($"<i>🆔 Alert ID: #{alert.Id}</i>");
 
             string message = messageBuilder.ToString();
 
-            // Send to all configured chat IDs
             int successCount = 0;
             foreach (var chatId in chatIds)
             {
@@ -135,29 +131,45 @@ public class TelegramNotificationService : ITelegramNotificationService
                         parseMode: Telegram.Bot.Types.Enums.ParseMode.Html
                     );
                     successCount++;
-                    _logger.LogInformation("Alert {AlertId} sent to Telegram chat {ChatId} ({Label})",
-                        alert.Id, chatId.ChatId, chatId.Label ?? "Unlabeled");
+
+                    _logger.LogInformation(
+                        "Alert {AlertId} sent to Telegram chat {ChatId} ({Label})",
+                        alert.Id, chatId.ChatId, chatId.Label ?? "Unlabeled"
+                    );
                 }
                 catch (ApiRequestException apiEx)
                 {
-                    _logger.LogError(apiEx, "Telegram API error sending to chat {ChatId}: {Message}",
-                        chatId.ChatId, apiEx.Message);
+                    _logger.LogError(
+                        apiEx,
+                        "Telegram API error sending to chat {ChatId}: {Message}",
+                        chatId.ChatId, apiEx.Message
+                    );
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Error sending alert to Telegram chat {ChatId}", chatId.ChatId);
+                    _logger.LogError(
+                        ex,
+                        "Error sending alert to Telegram chat {ChatId}",
+                        chatId.ChatId
+                    );
                 }
             }
 
             if (successCount > 0)
             {
-                _logger.LogInformation("Alert {AlertId} sent to {Count}/{Total} Telegram chats",
-                    alert.Id, successCount, chatIds.Count);
+                _logger.LogInformation(
+                    "Alert {AlertId} sent to {Count}/{Total} Telegram chats",
+                    alert.Id, successCount, chatIds.Count
+                );
             }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error sending Telegram notification for alert {AlertId}", alert.Id);
+            _logger.LogError(
+                ex,
+                "Error sending Telegram notification for alert {AlertId}",
+                alert.Id
+            );
         }
     }
 
@@ -175,12 +187,19 @@ public class TelegramNotificationService : ITelegramNotificationService
             var botClient = new TelegramBotClient(settings.TelegramBotToken);
             var me = await botClient.GetMe();
 
-            _logger.LogInformation("Telegram bot connection test successful. Bot: @{Username}", me.Username);
+            _logger.LogInformation(
+                "Telegram bot connection test successful. Bot: @{Username}",
+                me.Username
+            );
             return true;
         }
         catch (ApiRequestException apiEx)
         {
-            _logger.LogError(apiEx, "Telegram API error during connection test: {Message}", apiEx.Message);
+            _logger.LogError(
+                apiEx,
+                "Telegram API error during connection test: {Message}",
+                apiEx.Message
+            );
             return false;
         }
         catch (Exception ex)
@@ -193,12 +212,12 @@ public class TelegramNotificationService : ITelegramNotificationService
     public async Task<bool> IsEnabledAsync()
     {
         var settings = await GetSettingsAsync();
-        return settings?.IsTelegramEnabled == true && !string.IsNullOrEmpty(settings.TelegramBotToken);
+        return settings?.IsTelegramEnabled == true &&
+               !string.IsNullOrEmpty(settings.TelegramBotToken);
     }
 
     private async Task<NotificationSettings?> GetSettingsAsync()
     {
-        // Singleton pattern - there should only be one NotificationSettings record
         return await _dbContext.NotificationSettings
             .Include(n => n.TelegramChatIds)
             .FirstOrDefaultAsync();

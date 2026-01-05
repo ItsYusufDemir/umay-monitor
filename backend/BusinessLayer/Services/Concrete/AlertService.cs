@@ -14,18 +14,18 @@ public class AlertService : IAlertService
     private readonly ServerMonitoringDbContext _dbContext;
     private readonly ILogger<AlertService> _logger;
     private readonly ITelegramNotificationService _telegramService;
-    private readonly IHubContext<MonitoringHub> _hubContext;
+    private readonly IHubContext<AlertHub> _alertHubContext;
 
     public AlertService(
         ServerMonitoringDbContext dbContext,
         ILogger<AlertService> logger,
         ITelegramNotificationService telegramService,
-        IHubContext<MonitoringHub> hubContext)
+        IHubContext<AlertHub> alertHubContext)
     {
         _dbContext = dbContext;
         _logger = logger;
         _telegramService = telegramService;
-        _hubContext = hubContext;
+        _alertHubContext = alertHubContext;
     }
 
     public async Task EvaluateMetricsAsync(int serverId, MetricsPayload metrics)
@@ -461,6 +461,10 @@ public class AlertService : IAlertService
     {
         try
         {
+            // Get server name for the alert
+            var server = await _dbContext.MonitoredServers.FindAsync(serverId);
+            var serverName = server?.Name ?? $"Server {serverId}";
+
             // Create alert in database
             var alert = new Alert
             {
@@ -474,26 +478,27 @@ public class AlertService : IAlertService
             };
 
             _dbContext.Alerts.Add(alert);
+            
+            // Update the rule's LastTriggeredAtUtc for cooldown tracking
+            // This ensures cooldown works even if alerts are deleted
+            rule.LastTriggeredAtUtc = DateTime.UtcNow;
+            
             await _dbContext.SaveChangesAsync();
 
-            _logger.LogWarning("Alert triggered: {Message} (Server: {ServerId}, Rule: {RuleId})",
-                message, serverId, rule.Id);
+            _logger.LogWarning("Alert triggered: {Message} (Server: {ServerId}, Rule: {RuleId}, NextTriggerAfter: {NextTrigger})",
+                message, serverId, rule.Id, rule.LastTriggeredAtUtc.Value.AddMinutes(rule.CooldownMinutes));
 
-            // Broadcast to SignalR clients
-            await _hubContext.Clients.Group($"server-{serverId}")
-                .SendAsync("AlertTriggered", new
-                {
-                    AlertId = alert.Id,
-                    ServerId = serverId,
-                    Title = alert.Title,
-                    Message = alert.Message,
-                    Severity = alert.Severity,
-                    Timestamp = alert.CreatedAtUtc,
-                    RuleId = rule.Id,
-                    Metric = rule.Metric,
-                    ActualValue = actualValue,
-                    ThresholdValue = rule.ThresholdValue
-                });
+            // Broadcast to ALL connected clients via AlertHub
+            await _alertHubContext.BroadcastMetricThresholdAlert(
+                alert.Id,
+                serverId,
+                serverName,
+                rule.Metric,
+                actualValue,
+                rule.ThresholdValue,
+                rule.Comparison,
+                rule.Severity,
+                _logger);
 
             // Send Telegram notification
             await _telegramService.SendAlertAsync(alert);
@@ -514,17 +519,6 @@ public class AlertService : IAlertService
 
     public async Task<bool> CanTriggerAlertAsync(int ruleId, int serverId)
     {
-        // Get the most recent alert for this rule and server
-        var lastAlert = await _dbContext.Alerts
-            .Where(a => a.AlertRuleId == ruleId && a.MonitoredServerId == serverId)
-            .OrderByDescending(a => a.CreatedAtUtc)
-            .FirstOrDefaultAsync();
-
-        if (lastAlert == null)
-        {
-            return true; // No previous alert, can trigger
-        }
-
         // Get the rule to check cooldown period
         var rule = await _dbContext.AlertRules.FindAsync(ruleId);
         if (rule == null)
@@ -532,7 +526,19 @@ public class AlertService : IAlertService
             return false;
         }
 
-        var cooldownEnd = lastAlert.CreatedAtUtc.AddMinutes(rule.CooldownMinutes);
-        return DateTime.UtcNow >= cooldownEnd;
+        // Check if we're still in cooldown based on the rule's LastTriggeredAtUtc
+        if (rule.LastTriggeredAtUtc.HasValue)
+        {
+            var cooldownEnd = rule.LastTriggeredAtUtc.Value.AddMinutes(rule.CooldownMinutes);
+            if (DateTime.UtcNow < cooldownEnd)
+            {
+                _logger.LogDebug(
+                    "Alert rule {RuleId} is in cooldown until {CooldownEnd} (last triggered: {LastTriggered})",
+                    ruleId, cooldownEnd, rule.LastTriggeredAtUtc);
+                return false;
+            }
+        }
+
+        return true;
     }
 }

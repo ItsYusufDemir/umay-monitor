@@ -4,6 +4,7 @@ import api from '../api/axiosConfig';
 import { useMonitoring } from '../context/MonitoringContext';
 import signalRService from '../services/signalRService';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
 import ServiceList from '../components/services/ServiceList';
 import ServiceDetail from '../components/services/ServiceDetail';
 import ServerSelect from '../components/common/ServerSelect';
@@ -26,6 +27,7 @@ const friendlyMessage = (err, fallback = 'Failed') => {
 const ServicesPage = () => {
   const { token } = useAuth();
   const { selectedServerId, setSelectedServerId, ensureSubscribed } = useMonitoring();
+  const toast = useToast();
 
   const [pageError, setPageError] = useState('');
   const [pageNotice, setPageNotice] = useState('');
@@ -43,6 +45,9 @@ const ServicesPage = () => {
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [loadingLogs, setLoadingLogs] = useState(false);
   const [restarting, setRestarting] = useState(false);
+
+  // For removing from watchlist
+  const [removingFromWatchlist, setRemovingFromWatchlist] = useState(null);
 
   const normalizeServiceKey = useCallback((name) => {
     // Some backends may return "nginx" while service lists may show "nginx.service".
@@ -93,7 +98,6 @@ const ServicesPage = () => {
       }
       const key = normalizeServiceKey(serviceName);
       const isWatched = key ? watchedServices.has(key) : false;
-      const encodedName = encodeURIComponent(serviceName);
 
       try {
         setPageError('');
@@ -101,9 +105,15 @@ const ServicesPage = () => {
         setWatchBusyName(serviceName);
 
         if (isWatched) {
-          await api.delete(`/api/servers/${serverId}/watchlist/services/${encodedName}`);
+          await api.delete(`/api/servers/${serverId}/watchlist/services`, {
+            data: { serviceName }
+          });
+          toast.success('Removed from watchlist');
         } else {
-          await api.post(`/api/servers/${serverId}/watchlist/services/${encodedName}`);
+          await api.post(`/api/servers/${serverId}/watchlist/services`, {
+            serviceName
+          });
+          toast.success('Added to watchlist');
         }
 
         // Optimistic update so the UI reflects the change instantly
@@ -123,12 +133,45 @@ const ServicesPage = () => {
         // Also refresh from backend to keep source-of-truth in sync
         loadWatchlistConfig(serverId);
       } catch (err) {
-        setPageError(friendlyMessage(err, 'Watch operation failed'));
+        toast.error(friendlyMessage(err, 'Watch operation failed'));
       } finally {
         setWatchBusyName(null);
       }
     },
-    [loadWatchlistConfig, normalizeServiceKey, selectedServerId, token, watchedServices]
+    [loadWatchlistConfig, normalizeServiceKey, selectedServerId, token, watchedServices, toast]
+  );
+
+  const removeFromWatchlist = useCallback(
+    async (serviceName) => {
+      const serverId = selectedServerId;
+      if (!token || !serverId) {
+        setPageError('Select a server first');
+        return;
+      }
+
+      try {
+        setPageError('');
+        setRemovingFromWatchlist(serviceName);
+
+        await api.delete(`/api/servers/${serverId}/watchlist/services`, {
+          data: { serviceName }
+        });
+
+        // Update local state
+        setWatchlistConfig((prev) => ({
+          ...prev,
+          services: prev.services.filter((s) => s !== serviceName),
+        }));
+
+        toast.success(`Removed ${serviceName} from watchlist`);
+      } catch (err) {
+        setPageError(friendlyMessage(err, 'Failed to remove from watchlist'));
+        toast.error(friendlyMessage(err, 'Failed to remove from watchlist'));
+      } finally {
+        setRemovingFromWatchlist(null);
+      }
+    },
+    [selectedServerId, token, toast]
   );
 
   const loadServices = async () => {
@@ -227,49 +270,28 @@ const ServicesPage = () => {
       setPageError('');
       setPageNotice('');
 
-      // listen for command result (restart-service)
-      // Some builds may not expose explicit "off" helpers; keep it safe.
-      signalRService.offCommandSuccess?.();
-      signalRService.offCommandFailed?.();
-
-      signalRService.onCommandSuccess((evt) => {
-        if (evt?.action === 'restart-service') {
-          setRestarting(false);
-          setPageError('');
-          setPageNotice(evt?.message || 'Service restarted');
-          loadServices();
-          loadDetails(selectedName);
-        }
-      });
-
-      signalRService.onCommandFailed((evt) => {
-        if (evt?.action === 'restart-service') {
-          setRestarting(false);
-          setPageNotice('');
-          setPageError(String(evt?.message || 'Restart failed'));
-        }
-      });
-
-      // ensure signalr connected
-      if (token && !signalRService.isConnected()) {
-        await signalRService.connect(token);
-      }
-
       await ensureSubscribed(selectedServerId);
 
-      await api.post(
+      const res = await api.post(
         `/api/servers/${selectedServerId}/services/${encodeURIComponent(selectedName)}/restart`,
         {}
       );
 
-      setPageNotice(`Restart request sent: ${selectedName}`);
-
-      // safety timeout
-      setTimeout(() => setRestarting(false), 35000);
+      // Handle direct response (status 200)
+      const data = res.data;
+      const message = data?.message || 'Service restarted successfully';
+      
+      toast.success(message);
+      
+      // Reload service list and details
+      loadServices();
+      loadDetails(selectedName);
+      
     } catch (err) {
       console.error(err);
       setPageNotice('');
-      setPageError(friendlyMessage(err, 'Restart failed'));
+      toast.error(friendlyMessage(err, 'Restart failed'));
+    } finally {
       setRestarting(false);
     }
   };
@@ -291,7 +313,13 @@ const ServicesPage = () => {
   return (
     <div>
       <div className="page-header">
-          <h1 className="page-title">Services</h1>
+        <div className="page-header-title-area">
+          <h1 className="page-title">
+            <span className="page-title-icon">🔧</span>
+            Services
+          </h1>
+          <p className="page-subtitle">View and control system services across your infrastructure</p>
+        </div>
 
         <div className="action-row">
           <ServerSelect label="Server" minWidth={360} value={selectedServerId} onChange={setSelectedServerId} />
@@ -330,6 +358,62 @@ const ServicesPage = () => {
           onRefreshDetails={() => loadDetails(selectedName)}
           onLoadLogs={() => loadLogs(selectedName)}
         />
+      </div>
+
+      {/* Watchlist Section */}
+      <div style={{ marginTop: 32, paddingTop: 24, borderTop: '1px solid rgba(148, 163, 184, 0.2)' }}>
+        <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 16, color: '#e5e7eb' }}>Watched Services</h2>
+        {!selectedServerId ? (
+          <div style={{ padding: 16, backgroundColor: 'rgba(2, 6, 23, 0.35)', borderRadius: 8, color: '#9ca3af' }}>
+            Select a server to view watched services
+          </div>
+        ) : watchlistConfig.services.length === 0 ? (
+          <div style={{ padding: 16, backgroundColor: 'rgba(2, 6, 23, 0.35)', borderRadius: 8, color: '#9ca3af' }}>
+            No services in watchlist. Click the "Watch" button on any service to add it.
+          </div>
+        ) : (
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+              gap: 12,
+            }}
+          >
+            {watchlistConfig.services.map((serviceName) => (
+              <div
+                key={serviceName}
+                style={{
+                  padding: '12px 16px',
+                  backgroundColor: 'rgba(2, 6, 23, 0.35)',
+                  borderRadius: 8,
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  border: '1px solid rgba(148, 163, 184, 0.15)',
+                }}
+              >
+                <div style={{ color: '#e5e7eb', fontWeight: 500 }}>{serviceName}</div>
+                <button
+                  type="button"
+                  onClick={() => removeFromWatchlist(serviceName)}
+                  disabled={removingFromWatchlist === serviceName}
+                  style={{
+                    padding: '4px 12px',
+                    fontSize: 13,
+                    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                    color: '#ef4444',
+                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                    borderRadius: 6,
+                    cursor: removingFromWatchlist === serviceName ? 'not-allowed' : 'pointer',
+                    opacity: removingFromWatchlist === serviceName ? 0.5 : 1,
+                  }}
+                >
+                  {removingFromWatchlist === serviceName ? 'Removing...' : 'Remove'}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

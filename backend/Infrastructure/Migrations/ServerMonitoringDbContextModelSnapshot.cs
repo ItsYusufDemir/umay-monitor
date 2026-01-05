@@ -75,7 +75,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("MonitoredServerId", "CreatedAtUtc");
 
-                    b.ToTable("Alerts");
+                    b.ToTable("Alerts", (string)null);
                 });
 
             modelBuilder.Entity("Infrastructure.Entities.AlertRule", b =>
@@ -102,6 +102,9 @@ namespace Infrastructure.Migrations
 
                     b.Property<bool>("IsActive")
                         .HasColumnType("boolean");
+
+                    b.Property<DateTime?>("LastTriggeredAtUtc")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Metric")
                         .IsRequired()
@@ -132,7 +135,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("MonitoredServerId", "IsActive");
 
-                    b.ToTable("AlertRules");
+                    b.ToTable("AlertRules", (string)null);
                 });
 
             modelBuilder.Entity("Infrastructure.Entities.BackupJob", b =>
@@ -197,7 +200,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("AgentId", "IsActive");
 
-                    b.ToTable("BackupJobs");
+                    b.ToTable("BackupJobs", (string)null);
                 });
 
             modelBuilder.Entity("Infrastructure.Entities.BackupLog", b =>
@@ -225,6 +228,9 @@ namespace Infrastructure.Migrations
                     b.Property<Guid>("JobId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("Message")
+                        .HasColumnType("text");
+
                     b.Property<string>("SnapshotId")
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
@@ -242,7 +248,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("JobId", "CreatedAtUtc");
 
-                    b.ToTable("BackupLogs");
+                    b.ToTable("BackupLogs", (string)null);
                 });
 
             modelBuilder.Entity("Infrastructure.Entities.DiskPartitionMetric", b =>
@@ -284,7 +290,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("MetricSampleId");
 
-                    b.ToTable("DiskPartitionMetrics");
+                    b.ToTable("DiskPartitionMetrics", (string)null);
                 });
 
             modelBuilder.Entity("Infrastructure.Entities.MetricSample", b =>
@@ -334,7 +340,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("MonitoredServerId", "TimestampUtc");
 
-                    b.ToTable("MetricSamples");
+                    b.ToTable("MetricSamples", (string)null);
                 });
 
             modelBuilder.Entity("Infrastructure.Entities.MonitoredServer", b =>
@@ -400,7 +406,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("Hostname");
 
-                    b.ToTable("MonitoredServers");
+                    b.ToTable("MonitoredServers", (string)null);
                 });
 
             modelBuilder.Entity("Infrastructure.Entities.NetworkInterfaceMetric", b =>
@@ -440,7 +446,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("MetricSampleId");
 
-                    b.ToTable("NetworkInterfaceMetrics");
+                    b.ToTable("NetworkInterfaceMetrics", (string)null);
                 });
 
             modelBuilder.Entity("Infrastructure.Entities.NotificationSettings", b =>
@@ -463,7 +469,7 @@ namespace Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("NotificationSettings");
+                    b.ToTable("NotificationSettings", (string)null);
                 });
 
             modelBuilder.Entity("Infrastructure.Entities.ProcessInfo", b =>
@@ -498,7 +504,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("ProcessSnapshotId");
 
-                    b.ToTable("ProcessInfos");
+                    b.ToTable("ProcessInfos", (string)null);
                 });
 
             modelBuilder.Entity("Infrastructure.Entities.ProcessSnapshot", b =>
@@ -521,7 +527,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("MonitoredServerId", "TimestampUtc");
 
-                    b.ToTable("ProcessSnapshots");
+                    b.ToTable("ProcessSnapshots", (string)null);
                 });
 
             modelBuilder.Entity("Infrastructure.Entities.Service", b =>
@@ -554,7 +560,7 @@ namespace Infrastructure.Migrations
                     b.HasIndex("MonitoredServerId", "Name")
                         .IsUnique();
 
-                    b.ToTable("Services");
+                    b.ToTable("Services", (string)null);
                 });
 
             modelBuilder.Entity("Infrastructure.Entities.ServiceStatusHistory", b =>
@@ -585,7 +591,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("ServiceId", "TimestampUtc");
 
-                    b.ToTable("ServiceStatusHistories");
+                    b.ToTable("ServiceStatusHistories", (string)null);
                 });
 
             modelBuilder.Entity("Infrastructure.Entities.TelegramChatId", b =>
@@ -617,7 +623,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("NotificationSettingsId");
 
-                    b.ToTable("TelegramChatIds");
+                    b.ToTable("TelegramChatIds", (string)null);
                 });
 
             modelBuilder.Entity("Infrastructure.Entities.User", b =>
@@ -660,7 +666,7 @@ namespace Infrastructure.Migrations
                     b.HasIndex("Email")
                         .IsUnique();
 
-                    b.ToTable("Users");
+                    b.ToTable("Users", (string)null);
                 });
 
             modelBuilder.Entity("Infrastructure.Entities.WatchlistProcess", b =>
@@ -692,7 +698,7 @@ namespace Infrastructure.Migrations
                     b.HasIndex("MonitoredServerId", "ProcessName")
                         .IsUnique();
 
-                    b.ToTable("WatchlistProcesses");
+                    b.ToTable("WatchlistProcesses", (string)null);
                 });
 
             modelBuilder.Entity("Infrastructure.Entities.WatchlistService", b =>
@@ -724,7 +730,7 @@ namespace Infrastructure.Migrations
                     b.HasIndex("MonitoredServerId", "ServiceName")
                         .IsUnique();
 
-                    b.ToTable("WatchlistServices");
+                    b.ToTable("WatchlistServices", (string)null);
                 });
 
             modelBuilder.Entity("Infrastructure.Entities.Alert", b =>

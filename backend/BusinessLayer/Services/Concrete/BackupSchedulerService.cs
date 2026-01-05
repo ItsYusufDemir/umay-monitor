@@ -133,6 +133,7 @@ public class BackupSchedulerService : BackgroundService, IBackupSchedulerService
             var errorTaskId = Guid.NewGuid();
             await backupJobService.CreateBackupLogAsync(
                 jobId, errorTaskId, "error",
+                message: "Backup failed",
                 errorMessage: "Agent is offline");
             await backupJobService.UpdateJobStatusAsync(jobId, "error");
             
@@ -150,9 +151,10 @@ public class BackupSchedulerService : BackgroundService, IBackupSchedulerService
         // Generate task ID for tracking
         var taskId = Guid.NewGuid();
 
-        // Create pending log entry
-        await backupJobService.CreateBackupLogAsync(jobId, taskId, "pending");
-        await backupJobService.UpdateJobStatusAsync(jobId, "pending");
+        // Create running log entry
+        await backupJobService.CreateBackupLogAsync(jobId, taskId, "running",
+            message: "Backup started");
+        await backupJobService.UpdateJobStatusAsync(jobId, "running");
 
         // Send trigger command to agent
         var payload = new

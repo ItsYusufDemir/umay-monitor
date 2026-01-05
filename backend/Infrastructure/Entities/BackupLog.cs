@@ -17,22 +17,27 @@ public class BackupLog
     public Guid JobId { get; set; }
     
     /// <summary>
-    /// Execution status (success or error)
+    /// Execution status (success, error, pending)
     /// </summary>
     public string Status { get; set; } = string.Empty;
     
     /// <summary>
-    /// Restic snapshot hash/ID
+    /// Descriptive message about the log entry (e.g., "Backup completed", "Integrity check", "Backup triggered")
+    /// </summary>
+    public string? Message { get; set; }
+    
+    /// <summary>
+    /// Restic snapshot hash/ID (only for backup operations)
     /// </summary>
     public string? SnapshotId { get; set; }
     
     /// <summary>
-    /// Count of new files added in this backup
+    /// Count of new files added in this backup (only for backup operations)
     /// </summary>
     public int? FilesNew { get; set; }
     
     /// <summary>
-    /// Bytes added to the repository
+    /// Bytes added to the repository (only for backup operations)
     /// </summary>
     public long? DataAdded { get; set; }
     
@@ -42,12 +47,12 @@ public class BackupLog
     public double? DurationSeconds { get; set; }
     
     /// <summary>
-    /// Error message if backup failed
+    /// Error message if operation failed (null for successful operations)
     /// </summary>
     public string? ErrorMessage { get; set; }
     
     /// <summary>
-    /// Timestamp when the backup was executed
+    /// Timestamp when the operation was executed
     /// </summary>
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 

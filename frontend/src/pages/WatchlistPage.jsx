@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import api from '../api/axiosConfig';
 import { useMonitoring } from '../context/MonitoringContext';
+import { useToast } from '../context/ToastContext';
 import ServerSelect from '../components/common/ServerSelect';
 import {
   ResponsiveContainer,
@@ -160,6 +161,24 @@ const WatchlistPage = () => {
     } catch (_) {}
   }, [selectedServerId]);
 
+  // Auto-load watchlist when server changes
+  useEffect(() => {
+    if (!selectedServerId) return;
+    
+    const loadWatchlist = async () => {
+      try {
+        const res = await api.get(`/api/servers/${selectedServerId}/watchlist`);
+        const data = res?.data || {};
+        if (Array.isArray(data.services)) setServices(uniqCaseInsensitive(data.services));
+        if (Array.isArray(data.processes)) setProcesses(uniqCaseInsensitive(data.processes));
+      } catch (_) {
+        // Silently fail on auto-load
+      }
+    };
+    
+    loadWatchlist();
+  }, [selectedServerId]);
+
   const onChangeServer = (val) => {
     const sid = normalizeServerId(val);
     setSelectedServerId(sid);
@@ -177,23 +196,81 @@ const WatchlistPage = () => {
       // 1) ensure subscribed
       await ensureSubscribed(selectedServerId);
 
-      // 2) save config
-      const intervalNum = Number(metricsInterval);
-      const body = {
-        metricsInterval: Number.isFinite(intervalNum) ? intervalNum : 5,
-        watchlist: {
-          services: uniqCaseInsensitive(services || []),
-          processes: uniqCaseInsensitive(processes || []),
-        },
-      };
+      // 2) Get current watchlist from server to calculate diff
+      let currentServices = [];
+      let currentProcesses = [];
+      try {
+        const res = await api.get(`/api/servers/${selectedServerId}/watchlist`);
+        currentServices = res?.data?.services || [];
+        currentProcesses = res?.data?.processes || [];
+      } catch (_) {
+        // If we can't fetch current, assume empty
+      }
 
-      await api.put(`/api/servers/${selectedServerId}/configuration`, body);
+      const targetServices = uniqCaseInsensitive(services || []);
+      const targetProcesses = uniqCaseInsensitive(processes || []);
 
-      setNotice(
-        `Applied watchlist for server ${selectedServerId}`
+      // Services to add (in target but not in current)
+      const servicesToAdd = targetServices.filter(
+        (s) => !currentServices.some((cs) => cs.toLowerCase() === s.toLowerCase())
       );
+      // Services to remove (in current but not in target)
+      const servicesToRemove = currentServices.filter(
+        (s) => !targetServices.some((ts) => ts.toLowerCase() === s.toLowerCase())
+      );
+
+      // Processes to add (in target but not in current)
+      const processesToAdd = targetProcesses.filter(
+        (p) => !currentProcesses.some((cp) => cp.toLowerCase() === p.toLowerCase())
+      );
+      // Processes to remove (in current but not in target)
+      const processesToRemove = currentProcesses.filter(
+        (p) => !targetProcesses.some((tp) => tp.toLowerCase() === p.toLowerCase())
+      );
+
+      // Execute all operations
+      const operations = [];
+
+      for (const serviceName of servicesToAdd) {
+        operations.push(
+          api.post(`/api/servers/${selectedServerId}/watchlist/services`, { serviceName })
+        );
+      }
+      for (const serviceName of servicesToRemove) {
+        operations.push(
+          api.delete(`/api/servers/${selectedServerId}/watchlist/services`, { data: { serviceName } })
+        );
+      }
+      for (const cmdline of processesToAdd) {
+        operations.push(
+          api.post(`/api/servers/${selectedServerId}/watchlist/processes`, { cmdline })
+        );
+      }
+      for (const cmdline of processesToRemove) {
+        operations.push(
+          api.delete(`/api/servers/${selectedServerId}/watchlist/processes`, { data: { cmdline } })
+        );
+      }
+
+      if (operations.length > 0) {
+        await Promise.all(operations);
+      }
+
+      // 3) Update metrics interval via configuration endpoint (if supported)
+      const intervalNum = Number(metricsInterval);
+      try {
+        await api.put(`/api/servers/${selectedServerId}/configuration`, {
+          metricsInterval: Number.isFinite(intervalNum) ? intervalNum : 5,
+        });
+      } catch (_) {
+        // Configuration endpoint is optional
+      }
+
+      toast.success(`Watchlist applied for server ${selectedServerId}`);
     } catch (err) {
-      setError(getErrMsg(err, 'Apply watchlist failed'));
+      const errMsg = getErrMsg(err, 'Apply watchlist failed');
+      setError(errMsg);
+      toast.error(errMsg);
     } finally {
       setSaving(false);
     }
@@ -206,22 +283,26 @@ const WatchlistPage = () => {
     setLoadingConfig(true);
 
     try {
-      const res = await api.get(`/api/servers/${selectedServerId}/configuration`);
-      const cfg = res?.data || null;
+      // Load watchlist from watchlist endpoint
+      const watchlistRes = await api.get(`/api/servers/${selectedServerId}/watchlist`);
+      const watchlistData = watchlistRes?.data || {};
+      
+      if (Array.isArray(watchlistData.services)) setServices(uniqCaseInsensitive(watchlistData.services));
+      if (Array.isArray(watchlistData.processes)) setProcesses(uniqCaseInsensitive(watchlistData.processes));
 
-      if (cfg) {
-        if (cfg.metricsInterval != null) setMetricsInterval(String(cfg.metricsInterval));
-
-        const wl = cfg.watchlist || {};
-        if (Array.isArray(wl.services)) setServices(uniqCaseInsensitive(wl.services));
-        if (Array.isArray(wl.processes)) setProcesses(uniqCaseInsensitive(wl.processes));
-
-        setNotice('Configuration loaded.');
-      } else {
-        setNotice('No configuration returned.');
+      // Try to load metrics interval from configuration endpoint (optional)
+      try {
+        const configRes = await api.get(`/api/servers/${selectedServerId}/configuration`);
+        const cfg = configRes?.data || null;
+        if (cfg?.metricsInterval != null) setMetricsInterval(String(cfg.metricsInterval));
+      } catch (_) {
+        // Configuration endpoint is optional
       }
+
+      setNotice('Watchlist loaded.');
     } catch (err) {
-      setNotice('Config GET endpoint not available (optional). You can still save config with PUT.');
+      const errMsg = getErrMsg(err, 'Failed to load watchlist');
+      setError(errMsg);
     } finally {
       setLoadingConfig(false);
     }
@@ -278,7 +359,13 @@ const WatchlistPage = () => {
   return (
     <div>
       <div className="page-header">
-        <h1 className="page-title">Watchlist</h1>
+        <div className="page-header-title-area">
+          <h1 className="page-title">
+            <span className="page-title-icon">👁️</span>
+            Watchlist
+          </h1>
+          <p className="page-subtitle">Track specific processes and services with real-time monitoring</p>
+        </div>
 
         <div className="action-row">
           <span className={`badge ${connecting ? 'badge-warn' : 'badge-ok'}`}>

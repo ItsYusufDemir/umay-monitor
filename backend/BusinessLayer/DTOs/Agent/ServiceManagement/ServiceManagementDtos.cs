@@ -52,6 +52,12 @@ public class ServiceDetails
     [JsonPropertyName("name")]
     public string Name { get; set; } = string.Empty;
     
+    [JsonPropertyName("description")]
+    public string? Description { get; set; }
+    
+    [JsonPropertyName("enabled")]
+    public string? Enabled { get; set; }
+    
     [JsonPropertyName("activeState")]
     public string ActiveState { get; set; } = string.Empty;
     
@@ -73,8 +79,15 @@ public class ServiceDetails
     [JsonPropertyName("exitTime")]
     public string? ExitTime { get; set; }
     
-    [JsonPropertyName("restartPolicy")]
+    /// <summary>
+    /// Restart policy from systemd (e.g., "no", "always", "on-failure")
+    /// Agent sends this as "restart" field
+    /// </summary>
+    [JsonPropertyName("restart")]
     public string? RestartPolicy { get; set; }
+    
+    [JsonPropertyName("error")]
+    public string? Error { get; set; }
 }
 
 /// <summary>

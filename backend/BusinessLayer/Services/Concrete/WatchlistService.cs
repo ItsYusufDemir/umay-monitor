@@ -34,6 +34,7 @@ public class WatchlistService : IWatchlistService
             .Select(w => w.ServiceName)
             .ToListAsync();
 
+        // ProcessName column stores the cmdline
         var processes = await _dbContext.WatchlistProcesses
             .Where(w => w.MonitoredServerId == serverId && w.IsActive)
             .Select(w => w.ProcessName)
@@ -107,11 +108,11 @@ public class WatchlistService : IWatchlistService
         await UpdateAgentConfigurationAsync(serverId);
     }
 
-    public async Task AddProcessAsync(int serverId, string processName)
+    public async Task AddProcessAsync(int serverId, string cmdline)
     {
-        // Check if already exists
+        // Check if already exists (ProcessName column stores cmdline)
         var existing = await _dbContext.WatchlistProcesses
-            .FirstOrDefaultAsync(w => w.MonitoredServerId == serverId && w.ProcessName == processName);
+            .FirstOrDefaultAsync(w => w.MonitoredServerId == serverId && w.ProcessName == cmdline);
 
         if (existing != null)
         {
@@ -120,49 +121,50 @@ public class WatchlistService : IWatchlistService
                 existing.IsActive = true;
                 existing.AddedAtUtc = DateTime.UtcNow;
                 await _dbContext.SaveChangesAsync();
-                _logger.LogInformation("Reactivated process {ProcessName} in watchlist for server {ServerId}", processName, serverId);
+                _logger.LogInformation("Reactivated process '{Cmdline}' in watchlist for server {ServerId}", cmdline, serverId);
             }
             else
             {
-                _logger.LogInformation("Process {ProcessName} already in watchlist for server {ServerId}", processName, serverId);
+                _logger.LogInformation("Process '{Cmdline}' already in watchlist for server {ServerId}", cmdline, serverId);
                 return; // Already active, no need to update
             }
         }
         else
         {
-            // Add new entry
+            // Add new entry - store cmdline in ProcessName column
             var watchlistProcess = new WatchlistProcessEntity
             {
                 MonitoredServerId = serverId,
-                ProcessName = processName,
+                ProcessName = cmdline,  // ProcessName column stores cmdline
                 AddedAtUtc = DateTime.UtcNow,
                 IsActive = true
             };
 
             _dbContext.WatchlistProcesses.Add(watchlistProcess);
             await _dbContext.SaveChangesAsync();
-            _logger.LogInformation("Added process {ProcessName} to watchlist for server {ServerId}", processName, serverId);
+            _logger.LogInformation("Added process '{Cmdline}' to watchlist for server {ServerId}", cmdline, serverId);
         }
 
         // Update agent configuration
         await UpdateAgentConfigurationAsync(serverId);
     }
 
-    public async Task RemoveProcessAsync(int serverId, string processName)
+    public async Task RemoveProcessAsync(int serverId, string cmdline)
     {
+        // ProcessName column stores cmdline
         var watchlistProcess = await _dbContext.WatchlistProcesses
-            .FirstOrDefaultAsync(w => w.MonitoredServerId == serverId && w.ProcessName == processName && w.IsActive);
+            .FirstOrDefaultAsync(w => w.MonitoredServerId == serverId && w.ProcessName == cmdline && w.IsActive);
 
         if (watchlistProcess == null)
         {
-            _logger.LogWarning("Process {ProcessName} not found in watchlist for server {ServerId}", processName, serverId);
+            _logger.LogWarning("Process '{Cmdline}' not found in watchlist for server {ServerId}", cmdline, serverId);
             return;
         }
 
         // Soft delete by setting IsActive to false
         watchlistProcess.IsActive = false;
         await _dbContext.SaveChangesAsync();
-        _logger.LogInformation("Removed process {ProcessName} from watchlist for server {ServerId}", processName, serverId);
+        _logger.LogInformation("Removed process '{Cmdline}' from watchlist for server {ServerId}", cmdline, serverId);
 
         // Update agent configuration
         await UpdateAgentConfigurationAsync(serverId);
@@ -178,6 +180,7 @@ public class WatchlistService : IWatchlistService
 
     public async Task<List<string>> GetWatchedProcessesAsync(int serverId)
     {
+        // ProcessName column stores cmdline
         return await _dbContext.WatchlistProcesses
             .Where(w => w.MonitoredServerId == serverId && w.IsActive)
             .Select(w => w.ProcessName)

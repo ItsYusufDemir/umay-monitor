@@ -38,22 +38,43 @@ const ServiceList = (props) => {
   const selected = selectedServiceName ?? selectedProp ?? null;
 
   const [q, setQ] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all'); // all | active | inactive | failed | unknown
+  const [statusFilter, setStatusFilter] = useState('all'); // all | active | inactive
+  const [runningFilter, setRunningFilter] = useState('all'); // all | running | exited
+  const [watchFilter, setWatchFilter] = useState('all'); // all | watched | unwatched
 
   // ✅ Fix eslint warning: keep list reference stable via useMemo
   const list = useMemo(() => (Array.isArray(services) ? services : EMPTY), [services]);
 
   const counts = useMemo(() => {
-    const c = { all: list.length, active: 0, inactive: 0, failed: 0, unknown: 0 };
+    const c = { 
+      all: list.length, 
+      active: 0, 
+      inactive: 0,
+      running: 0,
+      exited: 0,
+      watched: 0,
+      unwatched: 0
+    };
     for (const s of list) {
       const a = norm(s?.activeState);
+      const sub = norm(s?.subState);
+      const wk = watchKey(getServiceName(s));
+      const isWatched = !!watchedServices?.has?.(wk);
+      
+      // Status counts (group failed/unknown with inactive)
       if (a === 'active') c.active += 1;
-      else if (a === 'inactive') c.inactive += 1;
-      else if (a === 'failed') c.failed += 1;
-      else c.unknown += 1;
+      else c.inactive += 1;
+      
+      // Running counts
+      if (sub === 'running') c.running += 1;
+      else c.exited += 1;
+      
+      // Watch counts
+      if (isWatched) c.watched += 1;
+      else c.unwatched += 1;
     }
     return c;
-  }, [list]);
+  }, [list, watchedServices]);
 
   const selectedObj = useMemo(() => {
     if (!selected) return null;
@@ -67,19 +88,32 @@ const ServiceList = (props) => {
       const name = norm(getServiceName(s));
       const active = norm(s?.activeState);
       const sub = norm(s?.subState);
+      const wk = watchKey(getServiceName(s));
+      const isWatched = !!watchedServices?.has?.(wk);
 
+      // Status filter (inactive includes failed/unknown)
       if (statusFilter !== 'all') {
-        if (statusFilter === 'unknown') {
-          if (active === 'active' || active === 'inactive' || active === 'failed') return false;
-        } else if (active !== statusFilter) {
-          return false;
-        }
+        if (statusFilter === 'active' && active !== 'active') return false;
+        if (statusFilter === 'inactive' && active === 'active') return false;
       }
 
+      // Running filter
+      if (runningFilter !== 'all') {
+        if (runningFilter === 'running' && sub !== 'running') return false;
+        if (runningFilter === 'exited' && sub === 'running') return false;
+      }
+
+      // Watch filter
+      if (watchFilter !== 'all') {
+        if (watchFilter === 'watched' && !isWatched) return false;
+        if (watchFilter === 'unwatched' && isWatched) return false;
+      }
+
+      // Search query
       if (!query) return true;
       return name.includes(query) || active.includes(query) || sub.includes(query);
     });
-  }, [list, q, statusFilter]);
+  }, [list, q, statusFilter, runningFilter, watchFilter, watchedServices]);
 
   const isSelectedHidden = useMemo(() => {
     if (!selected) return false;
@@ -180,46 +214,89 @@ const ServiceList = (props) => {
         </div>
       </div>
 
-      <div className="chip-row">
-        <button
-          type="button"
-          className={`chip ${statusFilter === 'all' ? 'chip-active' : ''}`}
-          onClick={() => setStatusFilter('all')}
-        >
-          All <span className="chip-count">{counts.all}</span>
-        </button>
+      <div style={{ 
+        display: 'grid', 
+        gridTemplateColumns: 'repeat(3, 1fr)', 
+        gap: '0.75rem', 
+        padding: '0.75rem',
+        background: '#2a2a2a',
+        borderRadius: '0.5rem',
+        marginBottom: '1rem'
+      }}>
+        <div>
+          <label style={{ display: 'block', fontSize: '0.8125rem', fontWeight: 500, marginBottom: '0.375rem', color: '#9ca3af', opacity: 0.9 }}>
+            WATCH
+          </label>
+          <select 
+            value={watchFilter} 
+            onChange={(e) => setWatchFilter(e.target.value)}
+            style={{ 
+              width: '100%', 
+              padding: '0.55rem 0.7rem',
+              borderRadius: '10px',
+              border: '1px solid rgba(148,163,184,0.28)',
+              background: 'rgba(2,6,23,0.55)',
+              color: '#e5e7eb',
+              fontSize: '0.875rem',
+              outline: 'none',
+              cursor: 'pointer'
+            }}
+          >
+            <option value="all">All ({counts.all})</option>
+            <option value="watched">Watched ({counts.watched})</option>
+            <option value="unwatched">Unwatched ({counts.unwatched})</option>
+          </select>
+        </div>
 
-        <button
-          type="button"
-          className={`chip ${chipToneClass('active')} ${statusFilter === 'active' ? 'chip-active' : ''}`}
-          onClick={() => setStatusFilter('active')}
-        >
-          Active <span className="chip-count">{counts.active}</span>
-        </button>
+        <div>
+          <label style={{ display: 'block', fontSize: '0.8125rem', fontWeight: 500, marginBottom: '0.375rem', color: '#9ca3af', opacity: 0.9 }}>
+            STATE
+          </label>
+          <select 
+            value={statusFilter} 
+            onChange={(e) => setStatusFilter(e.target.value)}
+            style={{ 
+              width: '100%', 
+              padding: '0.55rem 0.7rem',
+              borderRadius: '10px',
+              border: '1px solid rgba(148,163,184,0.28)',
+              background: 'rgba(2,6,23,0.55)',
+              color: '#e5e7eb',
+              fontSize: '0.875rem',
+              outline: 'none',
+              cursor: 'pointer'
+            }}
+          >
+            <option value="all">All ({counts.all})</option>
+            <option value="active">Active ({counts.active})</option>
+            <option value="inactive">Inactive ({counts.inactive})</option>
+          </select>
+        </div>
 
-        <button
-          type="button"
-          className={`chip ${chipToneClass('inactive')} ${statusFilter === 'inactive' ? 'chip-active' : ''}`}
-          onClick={() => setStatusFilter('inactive')}
-        >
-          Inactive <span className="chip-count">{counts.inactive}</span>
-        </button>
-
-        <button
-          type="button"
-          className={`chip ${chipToneClass('failed')} ${statusFilter === 'failed' ? 'chip-active' : ''}`}
-          onClick={() => setStatusFilter('failed')}
-        >
-          Failed <span className="chip-count">{counts.failed}</span>
-        </button>
-
-        <button
-          type="button"
-          className={`chip ${chipToneClass('unknown')} ${statusFilter === 'unknown' ? 'chip-active' : ''}`}
-          onClick={() => setStatusFilter('unknown')}
-        >
-          Unknown <span className="chip-count">{counts.unknown}</span>
-        </button>
+        <div>
+          <label style={{ display: 'block', fontSize: '0.8125rem', fontWeight: 500, marginBottom: '0.375rem', color: '#9ca3af', opacity: 0.9 }}>
+            SUBSTATE
+          </label>
+          <select 
+            value={runningFilter} 
+            onChange={(e) => setRunningFilter(e.target.value)}
+            style={{ 
+              width: '100%', 
+              padding: '0.55rem 0.7rem',
+              borderRadius: '10px',
+              border: '1px solid rgba(148,163,184,0.28)',
+              background: 'rgba(2,6,23,0.55)',
+              color: '#e5e7eb',
+              fontSize: '0.875rem',
+              outline: 'none',
+              cursor: 'pointer'
+            }}
+          >
+            <option value="all">All ({counts.all})</option>
+            <option value="running">Running ({counts.running})</option>
+            <option value="exited">Exited ({counts.exited})</option>
+          </select>
+        </div>
       </div>
 
       {loading ? (

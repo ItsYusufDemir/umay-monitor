@@ -26,6 +26,7 @@ const ServerSelect = ({
   minWidth = 280,
   className = '',
   showRefresh = true,
+  showAllOption = false,
 }) => {
   const [servers, setServers] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -33,7 +34,7 @@ const ServerSelect = ({
 
   // Single source of truth: parent-controlled value (usually MonitoringContext)
   // When value is null/undefined, show placeholder.
-  const selectedServerId = value == null || value === '' ? '' : String(value);
+  const selectedServerId = value === 'all' ? 'all' : (value == null || value === '' ? '' : String(value));
 
   const fetchServers = async () => {
     try {
@@ -67,6 +68,10 @@ const ServerSelect = ({
     const raw = e.target.value;
     if (raw === '') {
       onChange?.(null);
+      return;
+    }
+    if (raw === 'all') {
+      onChange?.('all');
       return;
     }
     const sid = Number(raw);
@@ -117,9 +122,14 @@ const ServerSelect = ({
             outline: 'none',
           }}
         >
-          <option value="" disabled>
-            Select a server…
-          </option>
+          {showAllOption && (
+            <option value="all">All Agents</option>
+          )}
+          {!showAllOption && (
+            <option value="" disabled>
+              Select a server…
+            </option>
+          )}
           {options.map((o) => (
             <option key={o.id} value={o.id}>
               {o.label}

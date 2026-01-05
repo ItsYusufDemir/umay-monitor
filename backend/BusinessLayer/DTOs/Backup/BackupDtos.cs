@@ -30,6 +30,14 @@ public class UpdateBackupJobRequest
 }
 
 /// <summary>
+/// Request to browse filesystem on agent
+/// </summary>
+public class BrowseFilesystemRequest
+{
+    public string Path { get; set; } = "/";
+}
+
+/// <summary>
 /// Response containing backup job details (credentials are never returned)
 /// </summary>
 public class BackupJobDto
@@ -56,6 +64,7 @@ public class BackupLogDto
     public Guid Id { get; set; }
     public Guid JobId { get; set; }
     public string Status { get; set; } = string.Empty;
+    public string? Message { get; set; }
     public string? SnapshotId { get; set; }
     public int? FilesNew { get; set; }
     public long? DataAdded { get; set; }

@@ -15,9 +15,11 @@ import AgentsPage from './pages/AgentsPage';
 
 import { AuthProvider } from './context/AuthContext';
 import { MonitoringProvider } from './context/MonitoringContext';
+import { ToastProvider } from './context/ToastContext';
 
 import ProtectedRoute from './components/common/ProtectedRoute';
 import AppLayout from './components/layout/AppLayout';
+import Toast from './components/common/Toast';
 
 import './styles.css';
 
@@ -25,7 +27,9 @@ const App = () => {
   return (
     <AuthProvider>
       <MonitoringProvider>
-        <Routes>
+        <ToastProvider>
+          <Toast />
+          <Routes>
           <Route path="/login" element={<LoginPage />} />
 
           <Route element={<ProtectedRoute />}>
@@ -51,6 +55,7 @@ const App = () => {
 
           <Route path="*" element={<LoginPage />} />
         </Routes>
+        </ToastProvider>
       </MonitoringProvider>
     </AuthProvider>
   );

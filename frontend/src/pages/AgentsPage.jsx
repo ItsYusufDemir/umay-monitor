@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import api from '../api/axiosConfig';
 import { useMonitoring } from '../context/MonitoringContext';
+import { useToast } from '../context/ToastContext';
 
 const unwrap = (data) => {
   // Some endpoints return plain arrays, some return { status, data, message }
@@ -91,6 +92,7 @@ const AgentInstallModal = ({ payload, onClose }) => {
 
 const AgentsPage = () => {
   const { refreshServers } = useMonitoring();
+  const toast = useToast();
 
   const [agents, setAgents] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -134,8 +136,9 @@ const AgentsPage = () => {
       setName('');
       await loadAgents();
       refreshServers?.();
+      toast.success(`Agent '${trimmed}' registered successfully`);
     } catch (err) {
-      setError(err?.response?.data?.message || err?.message || 'Registration failed');
+      toast.error(err?.response?.data?.message || err?.message || 'Registration failed');
     } finally {
       setRegistering(false);
     }
@@ -151,8 +154,9 @@ const AgentsPage = () => {
       await api.delete(`/api/agents/${id}`);
       await loadAgents();
       refreshServers?.();
+      toast.success('Agent deleted successfully');
     } catch (err) {
-      setError(err?.response?.data?.message || err?.message || 'Delete failed');
+      toast.error(err?.response?.data?.message || err?.message || 'Delete failed');
     } finally {
       setDeletingId(null);
     }
@@ -175,8 +179,9 @@ const AgentsPage = () => {
             : a
         )
       );
+      toast.success('Status refreshed');
     } catch (err) {
-      setError(err?.response?.data?.message || err?.message || 'Status refresh failed');
+      toast.error(err?.response?.data?.message || err?.message || 'Status refresh failed');
     } finally {
       setRefreshingId(null);
     }
@@ -196,7 +201,13 @@ const AgentsPage = () => {
   return (
     <div>
       <div className="page-header">
-        <h1 className="page-title">Agents</h1>
+        <div className="page-header-title-area">
+          <h1 className="page-title">
+            <span className="page-title-icon">🖥️</span>
+            Agents
+          </h1>
+          <p className="page-subtitle">Register and manage monitoring agents on your servers</p>
+        </div>
         <button className="btn" onClick={loadAgents} disabled={loading}>
           Refresh
         </button>
@@ -211,7 +222,7 @@ const AgentsPage = () => {
         </p>
 
         <div className="form-row" style={{ marginTop: 12 }}>
-          <div className="input-group" style={{ flex: 1, minWidth: 260 }}>
+          <div className="input-group" style={{ maxWidth: 320 }}>
             <label>Server name</label>
             <input
               value={name}
@@ -225,6 +236,7 @@ const AgentsPage = () => {
             className="btn btn-primary"
             onClick={registerAgent}
             disabled={registering || !name.trim()}
+            style={{ marginTop: 'auto' }}
           >
             {registering ? 'Registering…' : 'Register'}
           </button>
@@ -286,15 +298,6 @@ const AgentsPage = () => {
                       <td>{fmtLocal(a.createdAtUtc)}</td>
                       <td>
                         <div className="action-row">
-                          <button
-                            type="button"
-                            className="btn btn-muted"
-                            onClick={() => refreshStatus(a.id)}
-                            disabled={refreshingId === a.id}
-                            title="Refresh status"
-                          >
-                            {refreshingId === a.id ? 'Refreshing…' : 'Status'}
-                          </button>
                           <button
                             type="button"
                             className="btn btn-danger"

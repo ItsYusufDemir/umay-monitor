@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import api from '../api/axiosConfig';
 import { useMonitoring } from '../context/MonitoringContext';
+import { useToast } from '../context/ToastContext';
 import ServerSelect from '../components/common/ServerSelect';
 import ProcessList from '../components/processes/ProcessList';
 
@@ -87,6 +88,7 @@ const formatSeconds = (secs) => {
 
 const ProcessesPage = () => {
   const { selectedServerId, setSelectedServerId } = useMonitoring() || {};
+  const toast = useToast();
 
   const [processes, setProcesses] = useState([]);
   const [loadingList, setLoadingList] = useState(false);
@@ -106,6 +108,34 @@ const ProcessesPage = () => {
   );
   const [watchBusy, setWatchBusy] = useState({});
 
+  // Cache for process cmdlines fetched from detail API
+  const [processCmdlines, setProcessCmdlines] = useState({});
+
+  // For removing from watchlist
+  const [removingFromWatchlist, setRemovingFromWatchlist] = useState(null);
+
+  // Fetch cmdlines for all processes from detail API (for accurate watched status)
+  const fetchProcessCmdlines = async (sid, processList) => {
+    const newCmdlines = {};
+    
+    // Fetch details for each process in parallel (limited batch)
+    const fetchPromises = processList.map(async (p) => {
+      try {
+        const res = await api.get(`/api/servers/${sid}/processes/${p.pid}`);
+        const detail = unwrap(res?.data);
+        if (detail?.cmdline) {
+          newCmdlines[p.pid] = detail.cmdline;
+        }
+      } catch (err) {
+        // Ignore individual failures, process may have exited
+      }
+    });
+
+    await Promise.all(fetchPromises);
+    setProcessCmdlines(newCmdlines);
+    return newCmdlines;
+  };
+
   const loadWatchlistConfig = async (sid) => {
     try {
       const res = await api.get(`/api/servers/${sid}/watchlist`);
@@ -116,37 +146,89 @@ const ProcessesPage = () => {
     }
   };
 
-  const toggleProcessWatch = async (processKeyRaw) => {
+  const toggleProcessWatch = async (processKeyRaw, pidRaw) => {
     const sid = normalizeServerId(selectedServerId);
     const processKey = String(processKeyRaw || '').trim();
-    if (!processKey) return;
+    const pid = pidRaw ? Number(pidRaw) : null;
+    
+    if (!processKey && !pid) return;
 
-    const isWatched = watchedProcesses.has(processKey);
     const key = processKey;
-
     setWatchBusy((prev) => ({ ...prev, [key]: true }));
     setError('');
     setNotice('');
 
     try {
-      const encoded = encodeURIComponent(processKey);
+      // Fetch process details to get accurate cmdline
+      let cmdline = processKey;
+      if (pid) {
+        try {
+          const res = await api.get(`/api/servers/${sid}/processes/${pid}`);
+          const processDetail = unwrap(res?.data);
+          if (processDetail?.cmdline) {
+            cmdline = processDetail.cmdline;
+          }
+        } catch (err) {
+          console.warn('Failed to fetch process details, using key as cmdline:', err);
+        }
+      }
+
+      const isWatched = watchedProcesses.has(cmdline) || watchedProcesses.has(processKey);
+
       if (isWatched) {
-        await api.delete(`/api/servers/${sid}/watchlist/processes/${encoded}`);
+        await api.delete(`/api/servers/${sid}/watchlist/processes`, {
+          data: { cmdline }
+        });
+        toast.success(`Removed from watchlist`);
       } else {
-        await api.post(`/api/servers/${sid}/watchlist/processes/${encoded}`);
+        await api.post(`/api/servers/${sid}/watchlist/processes`, {
+          cmdline
+        });
+        toast.success(`Added to watchlist`);
       }
       await loadWatchlistConfig(sid);
     } catch (err) {
       const status = err?.response?.status;
-      if (status === 503) setError('Server is not connected');
-      else if (status === 504) setError('Request timed out');
-      else setError(getErrMsg(err) || 'Watchlist operation failed');
+      if (status === 503) toast.error('Server is not connected');
+      else if (status === 504) toast.error('Request timed out');
+      else toast.error(getErrMsg(err) || 'Watchlist operation failed');
     } finally {
       setWatchBusy((prev) => {
         const next = { ...prev };
         delete next[key];
         return next;
       });
+    }
+  };
+
+  const removeFromWatchlist = async (processName) => {
+    const sid = normalizeServerId(selectedServerId);
+    const processKey = String(processName || '').trim();
+    if (!processKey) return;
+
+    setRemovingFromWatchlist(processKey);
+    setError('');
+    setNotice('');
+
+    try {
+      await api.delete(`/api/servers/${sid}/watchlist/processes`, {
+        data: { cmdline: processKey }
+      });
+      
+      // Update local state
+      setWatchlistConfig((prev) => ({
+        ...prev,
+        processes: prev.processes.filter((p) => p !== processKey),
+      }));
+
+      toast.success(`Removed from watchlist`);
+    } catch (err) {
+      const status = err?.response?.status;
+      if (status === 503) toast.error('Server is not connected');
+      else if (status === 504) toast.error('Request timed out');
+      else toast.error(getErrMsg(err) || 'Failed to remove from watchlist');
+    } finally {
+      setRemovingFromWatchlist(null);
     }
   };
 
@@ -184,6 +266,9 @@ const ProcessesPage = () => {
 
       // Keep watchlist config in sync (for Watch buttons)
       await loadWatchlistConfig(sid);
+      
+      // Fetch accurate cmdlines from process details (for watched status detection)
+      fetchProcessCmdlines(sid, list);
 
       return list;
     } catch (err) {
@@ -280,7 +365,13 @@ const ProcessesPage = () => {
   return (
     <div>
       <div className="page-header">
-        <h1 className="page-title">Processes</h1>
+        <div className="page-header-title-area">
+          <h1 className="page-title">
+            <span className="page-title-icon">⚙️</span>
+            Processes
+          </h1>
+          <p className="page-subtitle">Monitor and manage running processes on your servers</p>
+        </div>
 
         <div className="action-row">
           <ServerSelect
@@ -313,6 +404,7 @@ const ProcessesPage = () => {
           watchedProcesses={watchedProcesses}
           onToggleWatch={toggleProcessWatch}
           watchBusy={watchBusy}
+          processCmdlines={processCmdlines}
         />
       </div>
 
@@ -400,6 +492,62 @@ const ProcessesPage = () => {
                 {detail.cmdline || '—'}
               </div>
             </div>
+          </div>
+        )}
+      </div>
+
+      {/* Watchlist Section */}
+      <div style={{ marginTop: 32, paddingTop: 24, borderTop: '1px solid rgba(148, 163, 184, 0.2)' }}>
+        <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 16, color: '#e5e7eb' }}>Watched Processes</h2>
+        {!selectedServerId ? (
+          <div style={{ padding: 16, backgroundColor: 'rgba(2, 6, 23, 0.35)', borderRadius: 8, color: '#9ca3af' }}>
+            Select a server to view watched processes
+          </div>
+        ) : watchlistConfig.processes.length === 0 ? (
+          <div style={{ padding: 16, backgroundColor: 'rgba(2, 6, 23, 0.35)', borderRadius: 8, color: '#9ca3af' }}>
+            No processes in watchlist. Click the "Watch" button on any process to add it.
+          </div>
+        ) : (
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+              gap: 12,
+            }}
+          >
+            {watchlistConfig.processes.map((processName) => (
+              <div
+                key={processName}
+                style={{
+                  padding: '12px 16px',
+                  backgroundColor: 'rgba(2, 6, 23, 0.35)',
+                  borderRadius: 8,
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  border: '1px solid rgba(148, 163, 184, 0.15)',
+                }}
+              >
+                <div style={{ color: '#e5e7eb', fontWeight: 500 }}>{processName}</div>
+                <button
+                  type="button"
+                  onClick={() => removeFromWatchlist(processName)}
+                  disabled={removingFromWatchlist === processName}
+                  style={{
+                    padding: '4px 12px',
+                    fontSize: 13,
+                    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                    color: '#ef4444',
+                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                    borderRadius: 6,
+                    cursor: removingFromWatchlist === processName ? 'not-allowed' : 'pointer',
+                    opacity: removingFromWatchlist === processName ? 0.5 : 1,
+                  }}
+                >
+                  {removingFromWatchlist === processName ? 'Removing...' : 'Remove'}
+                </button>
+              </div>
+            ))}
           </div>
         )}
       </div>

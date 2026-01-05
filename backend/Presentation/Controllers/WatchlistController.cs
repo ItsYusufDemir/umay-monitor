@@ -44,20 +44,21 @@ public class WatchlistController : ControllerBase
 
     /// <summary>
     /// Add a service to the watchlist
-    /// POST /api/servers/{serverId}/watchlist/services/{serviceName}
+    /// POST /api/servers/{serverId}/watchlist/services
+    /// Body: { "serviceName": "nginx" }
     /// </summary>
-    [HttpPost("services/{serviceName}")]
-    public async Task<IActionResult> AddService(int serverId, string serviceName)
+    [HttpPost("services")]
+    public async Task<IActionResult> AddService(int serverId, [FromBody] AddServiceRequest request)
     {
         try
         {
-            if (string.IsNullOrWhiteSpace(serviceName))
+            if (string.IsNullOrWhiteSpace(request?.ServiceName))
             {
                 return BadRequest(new { message = "Service name is required" });
             }
 
-            await _watchlistService.AddServiceAsync(serverId, serviceName);
-            return Ok(new { message = $"Service '{serviceName}' added to watchlist" });
+            await _watchlistService.AddServiceAsync(serverId, request.ServiceName);
+            return Ok(new { message = $"Service '{request.ServiceName}' added to watchlist" });
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("not connected"))
         {
@@ -70,27 +71,28 @@ public class WatchlistController : ControllerBase
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error adding service {ServiceName} to watchlist for server {ServerId}",
-                serviceName, serverId);
+                request?.ServiceName, serverId);
             return StatusCode(500, new { message = "Internal server error" });
         }
     }
 
     /// <summary>
     /// Remove a service from the watchlist
-    /// DELETE /api/servers/{serverId}/watchlist/services/{serviceName}
+    /// DELETE /api/servers/{serverId}/watchlist/services
+    /// Body: { "serviceName": "nginx" }
     /// </summary>
-    [HttpDelete("services/{serviceName}")]
-    public async Task<IActionResult> RemoveService(int serverId, string serviceName)
+    [HttpDelete("services")]
+    public async Task<IActionResult> RemoveService(int serverId, [FromBody] AddServiceRequest request)
     {
         try
         {
-            if (string.IsNullOrWhiteSpace(serviceName))
+            if (string.IsNullOrWhiteSpace(request?.ServiceName))
             {
                 return BadRequest(new { message = "Service name is required" });
             }
 
-            await _watchlistService.RemoveServiceAsync(serverId, serviceName);
-            return Ok(new { message = $"Service '{serviceName}' removed from watchlist" });
+            await _watchlistService.RemoveServiceAsync(serverId, request.ServiceName);
+            return Ok(new { message = $"Service '{request.ServiceName}' removed from watchlist" });
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("not connected"))
         {
@@ -103,27 +105,28 @@ public class WatchlistController : ControllerBase
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error removing service {ServiceName} from watchlist for server {ServerId}",
-                serviceName, serverId);
+                request?.ServiceName, serverId);
             return StatusCode(500, new { message = "Internal server error" });
         }
     }
 
     /// <summary>
-    /// Add a process to the watchlist
-    /// POST /api/servers/{serverId}/watchlist/processes/{processName}
+    /// Add a process to the watchlist by cmdline
+    /// POST /api/servers/{serverId}/watchlist/processes
+    /// Body: { "cmdline": "/usr/local/bin/super-agent" }
     /// </summary>
-    [HttpPost("processes/{processName}")]
-    public async Task<IActionResult> AddProcess(int serverId, string processName)
+    [HttpPost("processes")]
+    public async Task<IActionResult> AddProcess(int serverId, [FromBody] AddProcessRequest request)
     {
         try
         {
-            if (string.IsNullOrWhiteSpace(processName))
+            if (string.IsNullOrWhiteSpace(request?.Cmdline))
             {
-                return BadRequest(new { message = "Process name is required" });
+                return BadRequest(new { message = "Cmdline is required" });
             }
 
-            await _watchlistService.AddProcessAsync(serverId, processName);
-            return Ok(new { message = $"Process '{processName}' added to watchlist" });
+            await _watchlistService.AddProcessAsync(serverId, request.Cmdline);
+            return Ok(new { message = $"Process '{request.Cmdline}' added to watchlist" });
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("not connected"))
         {
@@ -135,28 +138,29 @@ public class WatchlistController : ControllerBase
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error adding process {ProcessName} to watchlist for server {ServerId}",
-                processName, serverId);
+            _logger.LogError(ex, "Error adding process '{Cmdline}' to watchlist for server {ServerId}",
+                request?.Cmdline, serverId);
             return StatusCode(500, new { message = "Internal server error" });
         }
     }
 
     /// <summary>
-    /// Remove a process from the watchlist
-    /// DELETE /api/servers/{serverId}/watchlist/processes/{processName}
+    /// Remove a process from the watchlist by cmdline
+    /// DELETE /api/servers/{serverId}/watchlist/processes
+    /// Body: { "cmdline": "/usr/local/bin/super-agent" }
     /// </summary>
-    [HttpDelete("processes/{processName}")]
-    public async Task<IActionResult> RemoveProcess(int serverId, string processName)
+    [HttpDelete("processes")]
+    public async Task<IActionResult> RemoveProcess(int serverId, [FromBody] AddProcessRequest request)
     {
         try
         {
-            if (string.IsNullOrWhiteSpace(processName))
+            if (string.IsNullOrWhiteSpace(request?.Cmdline))
             {
-                return BadRequest(new { message = "Process name is required" });
+                return BadRequest(new { message = "Cmdline is required" });
             }
 
-            await _watchlistService.RemoveProcessAsync(serverId, processName);
-            return Ok(new { message = $"Process '{processName}' removed from watchlist" });
+            await _watchlistService.RemoveProcessAsync(serverId, request.Cmdline);
+            return Ok(new { message = $"Process '{request.Cmdline}' removed from watchlist" });
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("not connected"))
         {
@@ -168,8 +172,8 @@ public class WatchlistController : ControllerBase
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error removing process {ProcessName} from watchlist for server {ServerId}",
-                processName, serverId);
+            _logger.LogError(ex, "Error removing process '{Cmdline}' from watchlist for server {ServerId}",
+                request?.Cmdline, serverId);
             return StatusCode(500, new { message = "Internal server error" });
         }
     }
@@ -194,7 +198,7 @@ public class WatchlistController : ControllerBase
     }
 
     /// <summary>
-    /// Get list of watched processes
+    /// Get list of watched processes (cmdlines)
     /// GET /api/servers/{serverId}/watchlist/processes
     /// </summary>
     [HttpGet("processes")]
@@ -211,4 +215,20 @@ public class WatchlistController : ControllerBase
             return StatusCode(500, new { message = "Internal server error" });
         }
     }
+}
+
+/// <summary>
+/// Request to add/remove a service from watchlist
+/// </summary>
+public class AddServiceRequest
+{
+    public string ServiceName { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Request to add/remove a process from watchlist
+/// </summary>
+public class AddProcessRequest
+{
+    public string Cmdline { get; set; } = string.Empty;
 }

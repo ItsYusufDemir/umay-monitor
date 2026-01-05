@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import api from '../api/axiosConfig';
 import { useMonitoring } from '../context/MonitoringContext';
+import { useToast } from '../context/ToastContext';
 import ServerSelect from '../components/common/ServerSelect';
 
 const TARGET_TYPES = [
@@ -43,6 +44,8 @@ const normalizeServerId = (v) => {
 
 const AlertRulesPage = () => {
   const monitoring = useMonitoring();
+  const toast = useToast();
+  
   const selectedServerId = normalizeServerId(monitoring?.selectedServerId ?? 1);
   const setSelectedServerId = monitoring?.setSelectedServerId;
 
@@ -195,11 +198,13 @@ const AlertRulesPage = () => {
       if (tid) body.targetId = tid;
 
       const res = await api.post(`/api/servers/${sid}/alert-rules`, body);
-      setNotice(`Rule created (id: ${res?.data?.id || '—'})`);
+      toast.success(`Rule created successfully (ID: ${res?.data?.id || '—'})`);
       resetForm();
       await loadRules();
     } catch (err) {
-      setError(getErrMsg(err, 'Failed to create alert rule'));
+      const errMsg = getErrMsg(err, 'Failed to create alert rule');
+      setError(errMsg);
+      toast.error(errMsg);
     } finally {
       setBusyId(null);
     }
@@ -237,10 +242,12 @@ const AlertRulesPage = () => {
       if (tid || targetType === 3 || targetType === 4) body.targetId = tid;
 
       await api.put(`/api/servers/${sid}/alert-rules/${editingRuleId}`, body);
-      setNotice('Rule updated');
+      toast.success('Rule updated successfully');
       await loadRules();
     } catch (err) {
-      setError(getErrMsg(err, 'Failed to update alert rule'));
+      const errMsg = getErrMsg(err, 'Failed to update alert rule');
+      setError(errMsg);
+      toast.error(errMsg);
     } finally {
       setBusyId(null);
     }
@@ -256,11 +263,13 @@ const AlertRulesPage = () => {
     try {
       const sid = normalizeServerId(serverId);
       await api.delete(`/api/servers/${sid}/alert-rules/${ruleId}`);
-      setNotice('Rule deleted');
+      toast.success('Rule deleted successfully');
       if (editingRuleId === ruleId) resetForm();
       await loadRules();
     } catch (err) {
-      setError(getErrMsg(err, 'Failed to delete alert rule'));
+      const errMsg = getErrMsg(err, 'Failed to delete alert rule');
+      setError(errMsg);
+      toast.error(errMsg);
     } finally {
       setBusyId(null);
     }
@@ -276,9 +285,12 @@ const AlertRulesPage = () => {
       await api.put(`/api/servers/${sid}/alert-rules/${rule.id}`, {
         isActive: !rule.isActive,
       });
+      toast.success(`Rule ${!rule.isActive ? 'activated' : 'deactivated'}`);
       await loadRules();
     } catch (err) {
-      setError(getErrMsg(err, 'Failed to toggle rule active'));
+      const errMsg = getErrMsg(err, 'Failed to toggle rule active');
+      setError(errMsg);
+      toast.error(errMsg);
     } finally {
       setBusyId(null);
     }
@@ -292,15 +304,16 @@ const AlertRulesPage = () => {
   return (
     <div>
       <div className="page-header">
-        <h1 className="page-title">Alert Rules</h1>
-        <div className="action-row">
-          <button className="btn" onClick={loadRules} disabled={loading}>
-            {loading ? 'Loading…' : 'Refresh'}
-          </button>
-          <button className="btn btn-muted" onClick={resetForm} disabled={busyId !== null}>
-            New Rule
-          </button>
+        <div className="page-header-title-area">
+          <h1 className="page-title">
+            <span className="page-title-icon">📋</span>
+            Alert Rules
+          </h1>
+          <p className="page-subtitle">Configure alerting thresholds and notification rules</p>
         </div>
+        <button className="btn" onClick={loadRules} disabled={loading}>
+          {loading ? 'Loading…' : 'Refresh'}
+        </button>
       </div>
 
       {error ? <div className="error-box">{error}</div> : null}

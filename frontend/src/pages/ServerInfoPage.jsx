@@ -60,7 +60,13 @@ const ServerInfoPage = () => {
   return (
     <div>
       <div className="page-header">
-        <h1 className="page-title">Server Info</h1>
+        <div className="page-header-title-area">
+          <h1 className="page-title">
+            <span className="page-title-icon">📊</span>
+            Server Info
+          </h1>
+          <p className="page-subtitle">Detailed hardware and software information for your servers</p>
+        </div>
 
         <div className="action-row">
           <ServerSelect label="Server" minWidth={360} value={selectedServerId} onChange={setSelectedServerId} />

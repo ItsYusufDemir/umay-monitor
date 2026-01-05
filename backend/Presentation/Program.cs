@@ -5,6 +5,7 @@ using BusinessLayer.Hubs;
 using BusinessLayer.Configuration;
 using Presentation.Configuration;
 using Presentation.Helpers;
+using Presentation.Logging;
 using Microsoft.AspNetCore.Server.Kestrel.Https;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
@@ -14,6 +15,9 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi.Models;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Configure clean console logging (message only, no timestamps/categories)
+builder.Logging.AddCleanConsoleFormatter();
 
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
@@ -92,7 +96,9 @@ builder.Services
                 var path = context.HttpContext.Request.Path;
                 
                 if (!string.IsNullOrEmpty(accessToken) && 
-                    path.StartsWithSegments("/monitoring-hub"))
+                    (path.StartsWithSegments("/monitoring-hub") || 
+                     path.StartsWithSegments("/notification-hub") ||
+                     path.StartsWithSegments("/alert-hub")))
                 {
                     context.Token = accessToken;
                 }
@@ -203,6 +209,8 @@ app.UseAuthorization();
 
 app.MapControllers();
 app.MapHub<MonitoringHub>("/monitoring-hub");
+app.MapHub<NotificationHub>("/notification-hub");
+app.MapHub<AlertHub>("/alert-hub");
 
 var webSocketOptions = new WebSocketOptions
 {
@@ -215,7 +223,9 @@ app.UseWebSockets(webSocketOptions);
 app.Use(async (context, next) =>
 {
     // Skip if this is a SignalR connection
-    if (context.Request.Path.StartsWithSegments("/monitoring-hub"))
+    if (context.Request.Path.StartsWithSegments("/monitoring-hub") || 
+        context.Request.Path.StartsWithSegments("/notification-hub") ||
+        context.Request.Path.StartsWithSegments("/alert-hub"))
     {
         await next();
         return;
@@ -241,6 +251,8 @@ app.Use(async (context, next) =>
 app.Logger.LogInformation("Server starting...");
 app.Logger.LogInformation("HTTP endpoint: http://localhost:5123");
 app.Logger.LogInformation("WebSocket endpoint (agents): ws://localhost:5123");
-app.Logger.LogInformation("SignalR Hub (frontend): /monitoring-hub");
+app.Logger.LogInformation("SignalR Hub (metrics): /monitoring-hub");
+app.Logger.LogInformation("SignalR Hub (notifications): /notification-hub");
+app.Logger.LogInformation("SignalR Hub (alerts): /alert-hub");
 
 await app.RunAsync();

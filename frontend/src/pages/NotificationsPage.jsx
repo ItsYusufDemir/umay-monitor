@@ -4,7 +4,9 @@ import api from '../api/axiosConfig';
 import signalRService from '../services/signalRService';
 import { useAuth } from '../context/AuthContext';
 import { useMonitoring } from '../context/MonitoringContext';
+import { useToast } from '../context/ToastContext';
 import ServerSelect from '../components/common/ServerSelect';
+import { stopAlertSound } from '../components/layout/AppLayout';
 
 const severityClass = (sev) => {
   const s = (sev || '').toLowerCase();
@@ -19,15 +21,15 @@ const getErrMsg = (err, fallback) =>
 
 const NotificationsPage = () => {
   const { token } = useAuth();
-
   const { selectedServerId, setSelectedServerId } = useMonitoring();
+  const toast = useToast();
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
   // Server selection is managed globally by MonitoringContext (dropdown)
 
-  const [acknowledged, setAcknowledged] = useState(false);
+  const [markedRead, setMarkedRead] = useState(false);
   const [severity, setSeverity] = useState(''); // Info/Warning/Critical
 
   const [pageSize, setPageSize] = useState(50);
@@ -57,7 +59,6 @@ const NotificationsPage = () => {
     try {
       const params = {
         serverId: selectedServerId || undefined,
-        acknowledged: acknowledged ? true : false,
         severity: severity ? severity : undefined,
         page,
         pageSize,
@@ -83,9 +84,9 @@ const NotificationsPage = () => {
   useEffect(() => {
     loadAlerts();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedServerId, acknowledged, severity, page, pageSize]);
+  }, [selectedServerId, markedRead, severity, page, pageSize]);
 
-  // Realtime AlertTriggered
+  // Realtime AlertTriggered (AlertHub)
   useEffect(() => {
     if (!token) return;
 
@@ -93,8 +94,9 @@ const NotificationsPage = () => {
 
     const ensureRealtime = async () => {
       try {
-        if (!signalRService.isConnected()) {
-          await signalRService.connect(token);
+        // Connect to AlertHub if not connected
+        if (!signalRService.isAlertConnected()) {
+          await signalRService.connectAlert(token);
         }
         if (!mounted) return;
         setRtConnected(true);
@@ -106,21 +108,29 @@ const NotificationsPage = () => {
 
           // doc payload -> AlertDto shape
           const a = {
-            id: evt.id,
-            createdAtUtc: evt.timestamp,
-            title: evt.title,
-            message: evt.message,
-            severity: evt.severity,
+            id: evt.id || evt.alertId,
+            createdAtUtc: evt.timestamp || evt.createdAtUtc,
+            title: evt.title || '',
+            message: evt.message || '',
+            severity: evt.severity || 'info',
             isAcknowledged: false,
             acknowledgedAtUtc: null,
-            monitoredServerId: evt.serverId,
-            serverName: evt.serverName,
-            alertRuleId: evt.ruleId,
+            monitoredServerId: evt.serverId || evt.monitoredServerId,
+            serverName: evt.serverName || '',
+            alertRuleId: evt.ruleId || evt.alertRuleId,
           };
+
+          // Only add to list if we have a valid ID
+          if (!a.id) {
+            console.warn('Received alert without valid ID:', evt);
+            return;
+          }
+
+          // Alert sound is played globally by AppLayout
 
           const matchesServer = Number(selectedServerId) === Number(a.monitoredServerId);
           const matchesSeverity = !severity || String(severity) === String(a.severity);
-          const matchesAck = acknowledged === false; // new alert is unack
+          const matchesAck = markedRead === false; // new alert is unread
 
           // Sadece ilk sayfadaysak listeye prepend edelim
           if (matchesServer && matchesSeverity && matchesAck && page === 1) {
@@ -141,7 +151,7 @@ const NotificationsPage = () => {
       mounted = false;
       signalRService.offAlertTriggered();
     };
-  }, [token, selectedServerId, severity, acknowledged, page]);
+  }, [token, selectedServerId, severity, markedRead, page]);
 
   const toggleSelected = (id, checked) => {
     setSelectedIds((prev) => ({ ...prev, [id]: checked }));
@@ -155,9 +165,11 @@ const NotificationsPage = () => {
     setSelectedIds(next);
   };
 
-  const acknowledgeOne = async (id) => {
+  const markOneAsRead = async (id) => {
     setError('');
     try {
+      console.log('Calling stopAlertSound from markOneAsRead');
+      stopAlertSound();
       await api.post(`/api/alerts/${id}/acknowledge`);
       setAlerts((prev) =>
         prev.map((a) =>
@@ -166,15 +178,17 @@ const NotificationsPage = () => {
             : a
         )
       );
+      toast.success('Alert marked as read');
     } catch (err) {
-      setError(getErrMsg(err, 'Failed to acknowledge alert'));
+      toast.error(getErrMsg(err, 'Failed to mark alert as read'));
     }
   };
 
-  const acknowledgeSelected = async () => {
+  const markSelectedAsRead = async () => {
     if (!selectedList.length) return;
     setError('');
     try {
+      stopAlertSound();
       await api.post('/api/alerts/acknowledge-batch', { alertIds: selectedList });
       setAlerts((prev) =>
         prev.map((a) =>
@@ -184,14 +198,17 @@ const NotificationsPage = () => {
         )
       );
       setSelectedIds({});
+      toast.success(`Marked ${selectedList.length} alerts as read`);
     } catch (err) {
-      setError(getErrMsg(err, 'Failed to acknowledge batch'));
+      toast.error(getErrMsg(err, 'Failed to mark selected as read'));
     }
   };
 
   const deleteOne = async (id) => {
     setError('');
     try {
+      console.log('Calling stopAlertSound from deleteOne');
+      stopAlertSound();
       await api.delete(`/api/alerts/${id}`);
       setAlerts((prev) => prev.filter((a) => a.id !== id));
       setSelectedIds((prev) => {
@@ -199,20 +216,23 @@ const NotificationsPage = () => {
         delete n[id];
         return n;
       });
+      toast.success('Alert deleted');
     } catch (err) {
-      setError(getErrMsg(err, 'Failed to delete alert'));
+      toast.error(getErrMsg(err, 'Failed to delete alert'));
     }
   };
 
-  const deleteAcknowledged = async () => {
+  const deleteRead = async () => {
     setError('');
     try {
+      stopAlertSound();
       await api.delete('/api/alerts/acknowledged', {
         params: { serverId: selectedServerId || undefined },
       });
       await loadAlerts();
+      toast.success('Read alerts deleted');
     } catch (err) {
-      setError(getErrMsg(err, 'Failed to delete acknowledged alerts'));
+      toast.error(getErrMsg(err, 'Failed to delete read alerts'));
     }
   };
 
@@ -222,7 +242,13 @@ const NotificationsPage = () => {
   return (
     <div>
       <div className="page-header">
-        <h1 className="page-title">Notifications</h1>
+        <div className="page-header-title-area">
+          <h1 className="page-title">
+            <span className="page-title-icon">🔔</span>
+            Notifications
+          </h1>
+          <p className="page-subtitle">View and manage alert notifications from your servers</p>
+        </div>
         <div className="action-row">
           <span className={`badge ${rtConnected ? 'badge-ok' : 'badge-warn'}`}>
             Realtime: {rtConnected ? 'Connected' : 'Disconnected'}
@@ -242,13 +268,13 @@ const NotificationsPage = () => {
           <ServerSelect label="Server" value={selectedServerId} onChange={onChangeServer} minWidth={360} />
 
           <div className="input-group" style={{ minWidth: 220 }}>
-            <label>Acknowledged</label>
+            <label>Status</label>
             <select
-              value={acknowledged ? 'true' : 'false'}
-              onChange={(e) => setAcknowledged(e.target.value === 'true')}
+              value={markedRead ? 'true' : 'false'}
+              onChange={(e) => setMarkedRead(e.target.value === 'true')}
             >
-              <option value="false">Unacknowledged</option>
-              <option value="true">Acknowledged</option>
+              <option value="false">Unread</option>
+              <option value="true">Read</option>
             </select>
           </div>
 
@@ -279,15 +305,15 @@ const NotificationsPage = () => {
         <div className="action-row" style={{ marginTop: 12 }}>
           <button
             className="btn btn-muted"
-            onClick={acknowledgeSelected}
+            onClick={markSelectedAsRead}
             disabled={!selectedList.length}
             title="Select alerts from the list below"
           >
-            Acknowledge Selected ({selectedList.length})
+            Mark Selected as Read ({selectedList.length})
           </button>
 
-          <button className="btn btn-danger" onClick={deleteAcknowledged}>
-            Delete Acknowledged
+          <button className="btn btn-danger" onClick={deleteRead}>
+            Delete Read Alerts
           </button>
 
           <div className="small" style={{ marginLeft: 'auto' }}>
@@ -346,20 +372,20 @@ const NotificationsPage = () => {
                     <td className="small">{a.message}</td>
                     <td>
                       {a.isAcknowledged ? (
-                        <span className="badge badge-muted">Acknowledged</span>
+                        <span className="badge badge-muted">Read</span>
                       ) : (
-                        <span className="badge badge-warn">New</span>
+                        <span className="badge badge-warn">Unread</span>
                       )}
                     </td>
                     <td>
                       <div className="action-row">
                         {!a.isAcknowledged ? (
-                          <button className="btn btn-warning" onClick={() => acknowledgeOne(a.id)}>
-                            Ack
+                          <button className="btn btn-warning" onClick={() => markOneAsRead(a.id)}>
+                            Mark Read
                           </button>
                         ) : (
                           <button className="btn btn-muted" disabled>
-                            Ack
+                            Read
                           </button>
                         )}
                         <button className="btn btn-danger" onClick={() => deleteOne(a.id)}>

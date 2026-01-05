@@ -85,6 +85,12 @@ public class AlertRule
     public int CooldownMinutes { get; set; } = 15;
 
     /// <summary>
+    /// Last time this rule triggered an alert (used for cooldown tracking)
+    /// This is updated even if alerts are deleted, ensuring cooldown works correctly
+    /// </summary>
+    public DateTime? LastTriggeredAtUtc { get; set; }
+
+    /// <summary>
     /// Optional: additional configuration as JSON
     /// </summary>
     public string? ConfigJson { get; set; }

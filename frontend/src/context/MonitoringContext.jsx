@@ -126,7 +126,17 @@ const normalizeWatchlistEvent = (incoming) => {
 export const MonitoringProvider = ({ children }) => {
   const { token, isAuthenticated } = useAuth();
 
-  const persisted = useMemo(() => safeParse(sessionStorage.getItem(STORAGE_KEY)) || {}, []);
+  const persisted = useMemo(() => {
+    if (!isAuthenticated) return {};
+    const data = safeParse(sessionStorage.getItem(STORAGE_KEY)) || {};
+    // Clear stale subscription state older than 5 minutes
+    const age = Date.now() - (data.persistedAt || 0);
+    if (age > 5 * 60 * 1000) {
+      return { selectedServerId: data.selectedServerId }; // Keep server selection only
+    }
+    return data;
+  }, [isAuthenticated]);
+  
   const persistedServers = useMemo(() => safeParse(sessionStorage.getItem(SERVERS_KEY)) || {}, []);
 
   // Selected server
@@ -135,12 +145,8 @@ export const MonitoringProvider = ({ children }) => {
   );
 
   // Track which serverId we are actually subscribed to (single active server).
-  const [subscribedServerId, setSubscribedServerId] = useState(
-    persisted.subscribedServerId != null ? normalizeServerId(persisted.subscribedServerId) : null
-  );
-  const [isSubscribed, setIsSubscribed] = useState(
-    Boolean(persisted.isSubscribed ?? false) && persisted.subscribedServerId != null
-  );
+  const [subscribedServerId, setSubscribedServerId] = useState(null);
+  const [isSubscribed, setIsSubscribed] = useState(false);
 
   // Metrics
   const [metrics, setMetrics] = useState(persisted.metrics ?? null);
@@ -161,6 +167,10 @@ export const MonitoringProvider = ({ children }) => {
   // In-flight subscription ...
   const subscribeInFlightRef = useRef(null);
   const autoSwitchRef = useRef(false);
+  
+  // Track subscription state in refs to avoid infinite loops in useEffect
+  const isSubscribedRef = useRef(false);
+  const subscribedServerIdRef = useRef(null);
 
   // ✅ Server list for dropdown
   const [servers, setServers] = useState(Array.isArray(persistedServers.list) ? persistedServers.list : []);
@@ -185,6 +195,7 @@ export const MonitoringProvider = ({ children }) => {
         watchlistMetrics,
         watchlistHistory: clampWatchlist(watchlistHistory, 200),
         lastCommandEvent,
+        persistedAt: Date.now(), // Add timestamp for staleness check
       })
     );
   }, [selectedServerId, subscribedServerId, isSubscribed, metrics, history, watchlistMetrics, watchlistHistory, lastCommandEvent]);
@@ -209,8 +220,12 @@ export const MonitoringProvider = ({ children }) => {
 
       setServers(list);
 
-      // If current selection is not in list, switch to first server (only if a server was already selected)
-      if (
+      // Auto-select first server if no server is currently selected
+      if (selectedServerId == null && list.length > 0) {
+        _setSelectedServerId(list[0].id);
+      }
+      // If current selection is not in list, switch to first server
+      else if (
         selectedServerId != null &&
         list.length > 0 &&
         !list.some((s) => Number(s.id) === Number(selectedServerId))
@@ -225,8 +240,27 @@ export const MonitoringProvider = ({ children }) => {
     }
   };
 
-  // Auto refresh servers on auth
+  // Auto refresh servers on auth and clear stale subscription state
   useEffect(() => {
+    if (!token || !isAuthenticated) {
+      // Clear all state when logged out
+      setIsSubscribed(false);
+      isSubscribedRef.current = false;
+      setSubscribedServerId(null);
+      subscribedServerIdRef.current = null;
+      setMetrics(null);
+      setHistory([]);
+      setWatchlistMetrics(null);
+      setWatchlistHistory([]);
+      return;
+    }
+    
+    // Reset subscription state on fresh login to avoid stale state issues
+    setIsSubscribed(false);
+    isSubscribedRef.current = false;
+    setSubscribedServerId(null);
+    subscribedServerIdRef.current = null;
+    
     if (!token || !isAuthenticated) return;
     refreshServers();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -243,20 +277,15 @@ export const MonitoringProvider = ({ children }) => {
         setConnecting(true);
         setLastError(null);
 
-        if (!signalRService.isConnected?.() && !signalRService.isConnected) {
-          // if isConnected is not a function, assume old service style
+        // Connect to all hubs if not connected
+        if (!signalRService.isMonitoringConnected()) {
+          await signalRService.connectMonitoring(token);
+        }
+        if (!signalRService.isNotificationConnected()) {
+          await signalRService.connectNotification(token);
         }
 
-        const connected =
-          typeof signalRService.isConnected === 'function'
-            ? signalRService.isConnected()
-            : Boolean(signalRService.isConnected);
-
-        if (!connected) {
-          await signalRService.connect(token);
-        }
-
-        // Metrics
+        // Metrics (MonitoringHub)
         signalRService.offMetricsUpdated?.();
         signalRService.onMetricsUpdated?.((data) => {
           if (!mounted) return;
@@ -268,7 +297,7 @@ export const MonitoringProvider = ({ children }) => {
           setHistory((prev) => clampHistory([...prev, normalized], 400));
         });
 
-        // Watchlist
+        // Watchlist (MonitoringHub)
         signalRService.offWatchlistMetricsUpdated?.();
         signalRService.onWatchlistMetricsUpdated?.((data) => {
           if (!mounted) return;
@@ -281,7 +310,7 @@ export const MonitoringProvider = ({ children }) => {
           setWatchlistHistory((prev) => clampWatchlist([...prev, normalized], 200));
         });
 
-        // Command events
+        // Command events (NotificationHub)
         signalRService.offCommandSuccess?.();
         signalRService.offCommandFailed?.();
 
@@ -338,23 +367,16 @@ export const MonitoringProvider = ({ children }) => {
         setSubscribing(true);
         setLastError(null);
 
-        const connected =
-          typeof signalRService.isConnected === 'function'
-            ? signalRService.isConnected()
-            : Boolean(signalRService.isConnected);
-
-        if (!connected) {
-          await signalRService.connect(token);
+        // Ensure MonitoringHub is connected
+        if (!signalRService.isMonitoringConnected()) {
+          await signalRService.connectMonitoring(token);
         }
 
-        let connectionId = signalRService.getConnectionId?.();
-        if (!connectionId && typeof signalRService.ensureConnectionId === 'function') {
-          connectionId = await signalRService.ensureConnectionId();
+        // Get MonitoringHub connection ID for subscription
+        const connectionId = signalRService.getMonitoringConnectionId();
+        if (!connectionId) {
+          throw new Error('MonitoringHub connection is not ready (missing connectionId).');
         }
-        if (!connectionId && typeof signalRService.waitForConnectionId === 'function') {
-          connectionId = await signalRService.waitForConnectionId(5000);
-        }
-        if (!connectionId) throw new Error('SignalR connection is not ready (missing connectionId).');
 
         const res = await api.post(
           `/api/monitoring/subscribe/${serverId}`,
@@ -374,11 +396,14 @@ export const MonitoringProvider = ({ children }) => {
         }
 
         setSubscribedServerId(serverId);
+        subscribedServerIdRef.current = serverId;
         setIsSubscribed(true);
+        isSubscribedRef.current = true;
         return true;
       } catch (err) {
         console.error('Subscribe failed:', err);
         setIsSubscribed(false);
+        isSubscribedRef.current = false;
         setLastError(err?.response?.data?.message || err?.message || 'Subscribe failed');
         throw err;
       } finally {
@@ -429,7 +454,9 @@ export const MonitoringProvider = ({ children }) => {
 
       if (subscribedServerId != null && normalizeServerId(subscribedServerId) === sid) {
         setIsSubscribed(false);
+        isSubscribedRef.current = false;
         setSubscribedServerId(null);
+        subscribedServerIdRef.current = null;
       }
 
       return true;
@@ -444,6 +471,7 @@ export const MonitoringProvider = ({ children }) => {
     if (subscribedServerId == null) {
       // nothing to do
       setIsSubscribed(false);
+      isSubscribedRef.current = false;
       return true;
     }
     const sid = normalizeServerId(subscribedServerId);
@@ -453,6 +481,7 @@ export const MonitoringProvider = ({ children }) => {
 
   // Auto-subscribe: after login, always keep the selected server subscribed.
   // When server changes, unsubscribe the previous server (single active server) and clear cached UI data.
+  // NOTE: We use refs to check subscription state to avoid infinite loops from state changes
   useEffect(() => {
     if (!token || !isAuthenticated) return;
 
@@ -469,20 +498,25 @@ export const MonitoringProvider = ({ children }) => {
         autoSwitchRef.current = true;
 
         // If we are already subscribed to the currently selected server, do nothing.
-        if (isSubscribed && subscribedServerId != null && normalizeServerId(subscribedServerId) === sid) {
+        // Use refs to check current state to avoid triggering re-renders
+        if (isSubscribedRef.current && subscribedServerIdRef.current != null && 
+            normalizeServerId(subscribedServerIdRef.current) === sid) {
           return;
         }
 
         // If we have an active subscription to a different server, unsubscribe it first.
-        if (isSubscribed && subscribedServerId != null && normalizeServerId(subscribedServerId) !== sid) {
+        if (isSubscribedRef.current && subscribedServerIdRef.current != null && 
+            normalizeServerId(subscribedServerIdRef.current) !== sid) {
           try {
-            await unsubscribeById(subscribedServerId);
+            await unsubscribeById(subscribedServerIdRef.current);
           } catch (e) {
             // Best-effort; still continue switching
           }
 
           setIsSubscribed(false);
+          isSubscribedRef.current = false;
           setSubscribedServerId(null);
+          subscribedServerIdRef.current = null;
 
           // Clear cached data to avoid mixing servers
           setMetrics(null);
@@ -502,7 +536,10 @@ export const MonitoringProvider = ({ children }) => {
     };
 
     run();
-  }, [token, isAuthenticated, selectedServerId, isSubscribed, subscribedServerId]);
+    // Only depend on token, isAuthenticated, and selectedServerId
+    // Do NOT include isSubscribed or subscribedServerId to avoid infinite loops
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, isAuthenticated, selectedServerId]);
 
   const ensureSubscribed = async (serverIdRaw = selectedServerId) => {
     const sid = normalizeServerId(serverIdRaw);

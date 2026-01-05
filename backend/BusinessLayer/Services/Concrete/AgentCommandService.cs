@@ -46,6 +46,11 @@ public class AgentCommandService : IAgentCommandService
         {
             _logger.LogError(ex, "Failed to resend request {MessageId}", request.MessageId);
         }
+        finally
+        {
+            // Reset the flag so the request can be retried again if needed
+            request.IsRetrying = false;
+        }
     }
 
     /// <summary>
@@ -124,8 +129,8 @@ public class AgentCommandService : IAgentCommandService
             var messageBytes = Encoding.UTF8.GetBytes(messageJson);
 
             // Log the exact message being sent to agent
-            _logger.LogInformation("📤 Sending WebSocket message to server {ServerId}: {MessageJson}", 
-                serverId, messageJson);
+            _logger.LogInformation("📤 Outgoing to Agent {ServerId} | Action: {Action} | MessageId: {MessageId} | Message: {MessageJson}", 
+                serverId, action, messageId, messageJson);
 
             // Send the message
             await socket.SendAsync(
@@ -151,7 +156,8 @@ public class AgentCommandService : IAgentCommandService
             }
 
             // Extract the payload and deserialize it to the expected response type
-            var payloadJson = JsonSerializer.Serialize(baseResponse.Payload, JsonOptions);
+            // Use case-insensitive deserialization to handle snake_case from Python agent
+            var payloadJson = JsonSerializer.Serialize(baseResponse.Payload);
             var response = JsonSerializer.Deserialize<TResponse>(payloadJson, options);
             
             if (response == null)
@@ -205,9 +211,8 @@ public class AgentCommandService : IAgentCommandService
         var messageJson = JsonSerializer.Serialize(requestMessage, JsonOptions);
         var messageBytes = Encoding.UTF8.GetBytes(messageJson);
 
-        _logger.LogInformation(
-            "Sending fire-and-forget command to server {ServerId}: Action='{Action}', Message: {MessageJson}",
-            serverId, action, messageJson);
+        _logger.LogInformation("📤 Fire-and-Forget to Agent {ServerId} | Action: {Action} | MessageId: {MessageId} | Message: {MessageJson}",
+            serverId, action, messageId, messageJson);
 
         await socket.SendAsync(
             new ArraySegment<byte>(messageBytes),

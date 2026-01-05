@@ -6,6 +6,7 @@ using Infrastructure.Entities;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using BusinessLayer.Hubs;
 
 namespace BusinessLayer.Services.Concrete;
 
@@ -18,7 +19,7 @@ public class WatchlistAutoRestartService : IWatchlistAutoRestartService
     private readonly IAgentCommandService _commandService;
     private readonly ITelegramNotificationService _telegramService;
     private readonly ServerMonitoringDbContext _dbContext;
-    private readonly IHubContext<BusinessLayer.Hubs.MonitoringHub> _hubContext;
+    private readonly IHubContext<AlertHub> _alertHubContext;
     private readonly ILogger<WatchlistAutoRestartService> _logger;
 
     public WatchlistAutoRestartService(
@@ -26,14 +27,14 @@ public class WatchlistAutoRestartService : IWatchlistAutoRestartService
         IAgentCommandService commandService,
         ITelegramNotificationService telegramService,
         ServerMonitoringDbContext dbContext,
-        IHubContext<BusinessLayer.Hubs.MonitoringHub> hubContext,
+        IHubContext<AlertHub> alertHubContext,
         ILogger<WatchlistAutoRestartService> logger)
     {
         _restartTracker = restartTracker;
         _commandService = commandService;
         _telegramService = telegramService;
         _dbContext = dbContext;
-        _hubContext = hubContext;
+        _alertHubContext = alertHubContext;
         _logger = logger;
     }
 
@@ -89,7 +90,7 @@ public class WatchlistAutoRestartService : IWatchlistAutoRestartService
                 }
 
                 // Broadcast recovery notification to SignalR
-                await _hubContext.Clients.Group($"server-{serverId}")
+                await _alertHubContext.Clients.Group($"server-{serverId}")
                     .SendAsync("ServiceRecovered", new
                     {
                         ServerId = serverId,
@@ -145,8 +146,26 @@ public class WatchlistAutoRestartService : IWatchlistAutoRestartService
 
     private async Task ProcessProcessAsync(int serverId, WatchlistProcessWrapper processWrapper)
     {
-        var processName = processWrapper.Data?.Name ?? 
-            (processWrapper.Message?.Contains("not found") == true ? "unknown" : "unknown");
+        // Use cmdline as the primary identifier since watchlist processes are tracked by cmdline
+        // Fall back to name only if cmdline is not available
+        var processName = processWrapper.Data?.Cmdline;
+        if (string.IsNullOrEmpty(processName))
+        {
+            processName = processWrapper.Data?.Name;
+        }
+        if (string.IsNullOrEmpty(processName) && !string.IsNullOrEmpty(processWrapper.Message))
+        {
+            // Try to extract cmdline from the message (format: "...cmdline: <cmdline>")
+            var cmdlineIndex = processWrapper.Message.IndexOf("cmdline:", StringComparison.OrdinalIgnoreCase);
+            if (cmdlineIndex >= 0)
+            {
+                processName = processWrapper.Message.Substring(cmdlineIndex + 8).Trim();
+            }
+        }
+        if (string.IsNullOrEmpty(processName))
+        {
+            processName = "unknown";
+        }
         var isOnline = processWrapper.Status?.ToLower() == "ok" && processWrapper.Data != null;
 
         if (isOnline)
@@ -209,16 +228,20 @@ public class WatchlistAutoRestartService : IWatchlistAutoRestartService
             // Set cooldown period (20 seconds)
             _restartTracker.SetCooldown(serverId, serviceName);
 
-            // Broadcast restart attempt notification
-            await _hubContext.Clients.Group($"server-{serverId}")
-                .SendAsync("ServiceRestartAttempted", new
-                {
-                    ServerId = serverId,
-                    ServiceName = serviceName,
-                    AttemptNumber = attemptNumber,
-                    MaxAttempts = 3,
-                    Timestamp = DateTime.UtcNow
-                });
+            // Get server name for the broadcast
+            var server = await _dbContext.MonitoredServers.FindAsync(serverId);
+            var serverName = server?.Name ?? $"Server {serverId}";
+
+            // Broadcast restart attempt notification to ALL clients
+            await _alertHubContext.Clients.All.SendAsync("ServiceRestartAttempted", new
+            {
+                ServerId = serverId,
+                ServerName = serverName,
+                ServiceName = serviceName,
+                AttemptNumber = attemptNumber,
+                MaxAttempts = 3,
+                Timestamp = DateTime.UtcNow
+            });
 
             _logger.LogInformation(
                 "Restart command sent for service {ServiceName} on server {ServerId}. Waiting {Cooldown}s before next attempt.",
@@ -236,6 +259,10 @@ public class WatchlistAutoRestartService : IWatchlistAutoRestartService
     {
         try
         {
+            // Get server name
+            var server = await _dbContext.MonitoredServers.FindAsync(serverId);
+            var serverName = server?.Name ?? $"Server {serverId}";
+
             // Create alert in database
             var alert = new Alert
             {
@@ -254,19 +281,14 @@ public class WatchlistAutoRestartService : IWatchlistAutoRestartService
                 "Alert created: Service {ServiceName} on server {ServerId} failed to restart after 3 attempts",
                 serviceName, serverId);
 
-            // Broadcast to SignalR clients
-            await _hubContext.Clients.Group($"server-{serverId}")
-                .SendAsync("AlertTriggered", new
-                {
-                    AlertId = alert.Id,
-                    ServerId = serverId,
-                    Title = alert.Title,
-                    Message = alert.Message,
-                    Severity = alert.Severity,
-                    Timestamp = alert.CreatedAtUtc,
-                    ServiceName = serviceName,
-                    Type = "ServiceRestartFailure"
-                });
+            // Broadcast to ALL connected clients via AlertHub
+            await _alertHubContext.BroadcastServiceOfflineAlert(
+                alert.Id,
+                serverId,
+                serverName,
+                serviceName,
+                alert.Message,
+                _logger);
 
             // Send Telegram notification
             await _telegramService.SendAlertAsync(alert);
@@ -283,6 +305,10 @@ public class WatchlistAutoRestartService : IWatchlistAutoRestartService
     {
         try
         {
+            // Get server name
+            var server = await _dbContext.MonitoredServers.FindAsync(serverId);
+            var serverName = server?.Name ?? $"Server {serverId}";
+
             // Create recovery alert in database
             var alert = new Alert
             {
@@ -301,19 +327,20 @@ public class WatchlistAutoRestartService : IWatchlistAutoRestartService
                 "Recovery alert created: Service {ServiceName} on server {ServerId} is back online",
                 serviceName, serverId);
 
-            // Broadcast to SignalR clients
-            await _hubContext.Clients.Group($"server-{serverId}")
-                .SendAsync("AlertTriggered", new
-                {
-                    AlertId = alert.Id,
-                    ServerId = serverId,
-                    Title = alert.Title,
-                    Message = alert.Message,
-                    Severity = alert.Severity,
-                    Timestamp = alert.CreatedAtUtc,
-                    ServiceName = serviceName,
-                    Type = "ServiceRecovered"
-                });
+            // Broadcast to ALL connected clients via AlertHub
+            await _alertHubContext.Clients.All.SendAsync("AlertTriggered", new
+            {
+                Type = "ServiceRecovered",
+                AlertId = alert.Id,
+                ServerId = serverId,
+                ServerName = serverName,
+                ServiceName = serviceName,
+                Severity = alert.Severity,
+                Message = alert.Message,
+                Timestamp = alert.CreatedAtUtc
+            });
+
+            _logger.LogInformation("? ServiceRecovered alert broadcast successfully");
 
             // Send Telegram notification
             await _telegramService.SendAlertAsync(alert);
@@ -330,13 +357,17 @@ public class WatchlistAutoRestartService : IWatchlistAutoRestartService
     {
         try
         {
+            // Get server name
+            var server = await _dbContext.MonitoredServers.FindAsync(serverId);
+            var serverName = server?.Name ?? $"Server {serverId}";
+
             // Create alert in database
             var alert = new Alert
             {
                 CreatedAtUtc = DateTime.UtcNow,
                 Title = $"Process Offline: {processName}",
-                Message = $"Process '{processName}' is not running or not found. {errorMessage ?? ""}",
-                Severity = "Warning",
+                Message = $"Process '{processName}' is not running or not found.",
+                Severity = "Critical",
                 MonitoredServerId = serverId,
                 IsAcknowledged = false
             };
@@ -348,19 +379,14 @@ public class WatchlistAutoRestartService : IWatchlistAutoRestartService
                 "Alert created: Process {ProcessName} on server {ServerId} is offline",
                 processName, serverId);
 
-            // Broadcast to SignalR clients
-            await _hubContext.Clients.Group($"server-{serverId}")
-                .SendAsync("AlertTriggered", new
-                {
-                    AlertId = alert.Id,
-                    ServerId = serverId,
-                    Title = alert.Title,
-                    Message = alert.Message,
-                    Severity = alert.Severity,
-                    Timestamp = alert.CreatedAtUtc,
-                    ProcessName = processName,
-                    Type = "ProcessOffline"
-                });
+            // Broadcast to ALL connected clients via AlertHub
+            await _alertHubContext.BroadcastProcessOfflineAlert(
+                alert.Id,
+                serverId,
+                serverName,
+                processName,
+                alert.Message,
+                _logger);
 
             // Send Telegram notification
             await _telegramService.SendAlertAsync(alert);
@@ -377,6 +403,10 @@ public class WatchlistAutoRestartService : IWatchlistAutoRestartService
     {
         try
         {
+            // Get server name
+            var server = await _dbContext.MonitoredServers.FindAsync(serverId);
+            var serverName = server?.Name ?? $"Server {serverId}";
+
             // Create recovery alert in database
             var alert = new Alert
             {
@@ -395,19 +425,20 @@ public class WatchlistAutoRestartService : IWatchlistAutoRestartService
                 "Recovery alert created: Process {ProcessName} on server {ServerId} is back online",
                 processName, serverId);
 
-            // Broadcast to SignalR clients
-            await _hubContext.Clients.Group($"server-{serverId}")
-                .SendAsync("AlertTriggered", new
-                {
-                    AlertId = alert.Id,
-                    ServerId = serverId,
-                    Title = alert.Title,
-                    Message = alert.Message,
-                    Severity = alert.Severity,
-                    Timestamp = alert.CreatedAtUtc,
-                    ProcessName = processName,
-                    Type = "ProcessRecovered"
-                });
+            // Broadcast to ALL connected clients via AlertHub
+            await _alertHubContext.Clients.All.SendAsync("AlertTriggered", new
+            {
+                Type = "ProcessRecovered",
+                AlertId = alert.Id,
+                ServerId = serverId,
+                ServerName = serverName,
+                ProcessName = processName,
+                Severity = alert.Severity,
+                Message = alert.Message,
+                Timestamp = alert.CreatedAtUtc
+            });
+
+            _logger.LogInformation("? ProcessRecovered alert broadcast successfully");
 
             // Send Telegram notification
             await _telegramService.SendAlertAsync(alert);

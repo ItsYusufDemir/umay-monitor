@@ -1,4 +1,4 @@
-﻿using BusinessLayer.Services.Interfaces;
+using BusinessLayer.Services.Interfaces;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -6,6 +6,7 @@ using Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using BusinessLayer.DTOs.Agent;
+using BusinessLayer.DTOs.Agent.SystemInfo;
 
 namespace Presentation.WebSockets;
 
@@ -17,6 +18,7 @@ public class WebSocketHandler
 {
     private readonly IWebSocketConnectionManager _connectionManager;
     private readonly IAgentMessageHandler _messageHandler;
+    private readonly IAgentCommandService _agentCommandService;
     private readonly ServerMonitoringDbContext _dbContext;
     private readonly ILogger<WebSocketHandler> _logger;
 
@@ -25,16 +27,19 @@ public class WebSocketHandler
     /// </summary>
     /// <param name="connectionManager">Manages the dictionary of active connections.</param>
     /// <param name="messageHandler">Parses and processes incoming JSON messages.</param>
+    /// <param name="agentCommandService">Service for sending commands to agents.</param>
     /// <param name="dbContext">DbContext for server monitoring data.</param>
     /// <param name="logger">Logger for WebSocket events.</param>
     public WebSocketHandler(
         IWebSocketConnectionManager connectionManager,
         IAgentMessageHandler messageHandler,
+        IAgentCommandService agentCommandService,
         ServerMonitoringDbContext dbContext,
         ILogger<WebSocketHandler> logger)
     {
         _connectionManager = connectionManager;
         _messageHandler = messageHandler;
+        _agentCommandService = agentCommandService;
         _dbContext = dbContext;
         _logger = logger;
     }
@@ -98,79 +103,56 @@ public class WebSocketHandler
                 var message = Encoding.UTF8.GetString(messageBytes.ToArray());
 
                 if (string.IsNullOrEmpty(message))
+                {
                     continue;
+                }
 
+                // First message must be authentication
                 if (!isAuthenticated)
                 {
                     var authResult = await HandleAuthentication(message, webSocket);
-                    
-                    if (!authResult.IsAuthenticated)
+                    isAuthenticated = authResult.IsAuthenticated;
+                    authenticatedServerId = authResult.ServerId;
+
+                    if (!isAuthenticated)
                     {
-                        _logger.LogWarning("Authentication failed. Closing connection.");
+                        _logger.LogWarning("Authentication failed, closing connection");
                         await webSocket.CloseAsync(
                             WebSocketCloseStatus.PolicyViolation,
                             "Authentication failed",
                             CancellationToken.None);
                         return;
                     }
-
-                    isAuthenticated = true;
-                    authenticatedServerId = authResult.ServerId;
                     
-                    _logger.LogInformation("Agent authenticated successfully: Server {ServerId}", authenticatedServerId);
+                    continue;
                 }
-                else
-                {
-                    if (authenticatedServerId.HasValue)
-                    {
-                        try
-                        {
-                            await _messageHandler.HandleMessageAsync(message, authenticatedServerId.Value)
-                                .ConfigureAwait(false);
 
-                            var server = await _dbContext.MonitoredServers.FindAsync(authenticatedServerId.Value);
-                            if (server != null)
-                            {
-                                server.LastSeenUtc = DateTime.UtcNow;
-                                await _dbContext.SaveChangesAsync();
-                            }
-                        }
-                        catch (ObjectDisposedException ex)
-                        {
-                            _logger.LogError(ex, "Service was disposed - scope ended prematurely for server {ServerId}", 
-                                authenticatedServerId);
-                            throw;
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogError(ex, "Error processing message for server {ServerId}", 
-                                authenticatedServerId);
-                            throw;
-                        }
-                    }
-                    else
-                    {
-                        _logger.LogWarning("Received message but server ID is not set");
-                    }
+                // Process authenticated messages
+                if (authenticatedServerId.HasValue)
+                {
+                    await _messageHandler.HandleMessageAsync(message, authenticatedServerId.Value);
                 }
             }
         }
         catch (WebSocketException ex)
         {
-            _logger.LogError(ex, "WebSocket error for server {ServerId}", authenticatedServerId);
+            _logger.LogWarning(ex, "WebSocket exception: {Message}", ex.Message);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Unexpected error for server {ServerId}", authenticatedServerId);
+            _logger.LogError(ex, "Unexpected error in WebSocket loop");
         }
         finally
         {
+            // Clean up
             if (authenticatedServerId.HasValue)
             {
-                var agentId = _connectionManager.GetId(webSocket);
-                if (agentId != null)
+                _connectionManager.RemoveSocket(authenticatedServerId.Value.ToString());
+                
+                // Log the disconnection only for authenticated clients
+                if (isAuthenticated)
                 {
-                    await _connectionManager.RemoveSocket(agentId);
+                    _logger.LogInformation("Agent disconnected: Server {ServerId}", authenticatedServerId);
                 }
 
                 var server = await _dbContext.MonitoredServers.FindAsync(authenticatedServerId.Value);
@@ -240,6 +222,9 @@ public class WebSocketHandler
                 server.Name
             );
 
+            // Fetch server info from agent and update hostname/system info in database
+            _ = Task.Run(async () => await FetchAndUpdateServerInfoAsync(server.Id));
+
             return (true, server.Id);
         }
         catch (JsonException ex)
@@ -247,6 +232,71 @@ public class WebSocketHandler
             _logger.LogError(ex, "Failed to parse authentication message");
             await SendAuthResponse(webSocket, 0, "error", "Invalid message format");
             return (false, null);
+        }
+    }
+
+    /// <summary>
+    /// Fetches server info from the agent and updates the hostname and system info in the database.
+    /// Called asynchronously after successful authentication.
+    /// </summary>
+    private async Task FetchAndUpdateServerInfoAsync(int serverId)
+    {
+        try
+        {
+            // Small delay to ensure WebSocket loop is ready to process messages
+            await Task.Delay(500);
+
+            _logger.LogInformation("Fetching server info for newly connected agent {ServerId}", serverId);
+
+            var response = await _agentCommandService.SendCommandAsync<GetServerInfoRequest, GetServerInfoResponse>(
+                serverId,
+                AgentActions.GetServerInfo,
+                null,
+                TimeSpan.FromSeconds(10)
+            );
+
+            if (response?.Status == "ok" && response.Data != null)
+            {
+                var serverInfo = response.Data;
+                
+                // Update the server record in database
+                var server = await _dbContext.MonitoredServers.FindAsync(serverId);
+                if (server != null)
+                {
+                    // Update hostname and system info
+                    server.Hostname = serverInfo.Hostname;
+                    server.IpAddress = serverInfo.IpAddress;
+                    server.Os = serverInfo.Os;
+                    server.OsVersion = serverInfo.OsVersion;
+                    server.Kernel = serverInfo.Kernel;
+                    server.Architecture = serverInfo.Architecture;
+                    server.CpuModel = serverInfo.CpuModel;
+                    server.CpuCores = serverInfo.CpuCores;
+                    server.CpuThreads = serverInfo.CpuThreads;
+
+                    await _dbContext.SaveChangesAsync();
+
+                    _logger.LogInformation(
+                        "Updated server info for {ServerId}: Hostname='{Hostname}', OS='{Os}', IP='{IpAddress}'",
+                        serverId, serverInfo.Hostname, serverInfo.Os, serverInfo.IpAddress
+                    );
+                }
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Failed to fetch server info for {ServerId}: Status={Status}",
+                    serverId, response?.Status ?? "null"
+                );
+            }
+        }
+        catch (TimeoutException)
+        {
+            _logger.LogWarning("Timeout fetching server info for agent {ServerId}", serverId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error fetching server info for agent {ServerId}", serverId);
         }
     }
 

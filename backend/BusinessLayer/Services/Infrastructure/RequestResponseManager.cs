@@ -3,10 +3,6 @@ using Microsoft.Extensions.Logging;
 
 namespace BusinessLayer.Services.Infrastructure;
 
-/// <summary>
-/// Tracks pending requests sent to agents and matches them with responses
-/// CRITICAL: Each request must have a unique ID to prevent agent response caching issues
-/// </summary>
 public class PendingRequest
 {
     public int MessageId { get; set; }
@@ -30,6 +26,16 @@ public class PendingRequest
     /// Original request payload (for retries)
     /// </summary>
     public object? Payload { get; set; }
+    
+    /// <summary>
+    /// Flag to prevent multiple simultaneous retries
+    /// </summary>
+    public volatile bool IsRetrying = false;
+    
+    /// <summary>
+    /// Timeout value for this request (used to calculate retry interval)
+    /// </summary>
+    public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(30);
 }
 
 /// <summary>
@@ -84,12 +90,22 @@ public class RequestResponseManager : IRequestResponseManager
     
     // Retry configuration
     private const int MaxRetries = 3;
-    private static readonly TimeSpan RetryInterval = TimeSpan.FromSeconds(5);
+    // Minimum retry interval to avoid too frequent retries
+    private static readonly TimeSpan MinRetryInterval = TimeSpan.FromSeconds(20);
     
     public RequestResponseManager(ILogger<RequestResponseManager>? logger = null)
     {
         _logger = logger;
         StartMonitoring();
+    }
+    
+    /// <summary>
+    /// Calculate retry interval based on request timeout (1/3 of timeout, minimum 15 seconds)
+    /// </summary>
+    private static TimeSpan GetRetryInterval(TimeSpan timeout)
+    {
+        var calculated = TimeSpan.FromSeconds(timeout.TotalSeconds / 3);
+        return calculated > MinRetryInterval ? calculated : MinRetryInterval;
     }
     
     /// <summary>
@@ -113,11 +129,16 @@ public class RequestResponseManager : IRequestResponseManager
                     
                     foreach (var request in _pendingRequests.Values.ToList())
                     {
+                        // Skip if already being retried
+                        if (request.IsRetrying)
+                            continue;
+                            
                         var lastCheckTime = request.LastRetryTime ?? request.CreatedAt;
                         var elapsed = now - lastCheckTime;
+                        var retryInterval = GetRetryInterval(request.Timeout);
                         
                         // Check if this request needs a retry
-                        if (elapsed >= RetryInterval)
+                        if (elapsed >= retryInterval)
                         {
                             if (request.RetryCount < MaxRetries)
                             {
@@ -131,17 +152,23 @@ public class RequestResponseManager : IRequestResponseManager
                         }
                     }
                     
-                    // Handle retries
+                    // Handle retries - one at a time, sequentially
                     foreach (var request in requestsToRetry)
                     {
+                        // Double-check and set the flag atomically
+                        if (request.IsRetrying)
+                            continue;
+                            
+                        request.IsRetrying = true;
                         request.RetryCount++;
                         request.LastRetryTime = now;
+                        
                         _logger?.LogWarning(
                             "Retrying request {MessageId} for action '{Action}' on server {ServerId} (attempt {RetryCount}/{MaxRetries})",
                             request.MessageId, request.Action, request.ServerId, request.RetryCount, MaxRetries
                         );
                         
-                        // Note: Actual resending will be handled by ResendRequest callback
+                        // Invoke retry event - the handler should reset IsRetrying when done
                         OnRetryNeeded?.Invoke(request);
                     }
                     
@@ -207,7 +234,8 @@ public class RequestResponseManager : IRequestResponseManager
             MessageId = messageId,
             ServerId = serverId,
             Action = action,
-            CreatedAt = DateTime.UtcNow
+            CreatedAt = DateTime.UtcNow,
+            Timeout = timeout
         };
 
         // Set up timeout cancellation
@@ -290,7 +318,8 @@ public class RequestResponseManager : IRequestResponseManager
             ServerId = serverId,
             Action = action,
             CreatedAt = DateTime.UtcNow,
-            Payload = payload
+            Payload = payload,
+            Timeout = timeout
         };
 
         // Set up timeout cancellation (but retries will happen first)
@@ -310,8 +339,8 @@ public class RequestResponseManager : IRequestResponseManager
 
         _pendingRequests.TryAdd(messageId, request);
         
-        _logger?.LogDebug("Registered request {MessageId} for action '{Action}' on server {ServerId}", 
-            messageId, action, serverId);
+        _logger?.LogDebug("Registered request {MessageId} for action '{Action}' on server {ServerId} with timeout {Timeout}s", 
+            messageId, action, serverId, timeout.TotalSeconds);
         
         return messageId;
     }

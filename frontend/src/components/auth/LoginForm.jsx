@@ -1,5 +1,6 @@
 // src/components/auth/LoginForm.jsx
 import React, { useState } from 'react';
+import logo from '../logo.png';
 
 const LoginForm = ({ onSubmit, loading, error }) => {
   const [email, setEmail] = useState('admin@example.com');
@@ -14,6 +15,18 @@ const LoginForm = ({ onSubmit, loading, error }) => {
   return (
     <div className="login-container">
       <form className="login-card" onSubmit={handleSubmit}>
+        <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
+          <img 
+  src={logo} 
+  alt="Umay Monitor" 
+  style={{ 
+    width: '240px', 
+    height: '240px', 
+    objectFit: 'contain', 
+    transform: 'scale(2)' // Increase or decrease this number to fit
+  }} 
+/>
+        </div>
         <h2>Admin Login</h2>
         <div className="input-group">
           <label htmlFor="email">E-mail</label>

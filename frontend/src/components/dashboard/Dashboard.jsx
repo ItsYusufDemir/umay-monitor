@@ -33,37 +33,16 @@ const Dashboard = ({
   return (
     <div className="space-y-4">
       {/* Top bar */}
-      <div
-        style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 12,
-        }}
-      >
-  
-        {/* Left: status */}
-        {/*
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>
-          <span className={`inline-flex items-center rounded-full px-3 py-1 text-sm ${statusClass}`}>
-            <span className="mr-2 inline-block h-2 w-2 rounded-full bg-current opacity-80" />
-            {statusText}
-          </span>
+      <div className="page-header">
+        <div className="page-header-title-area">
+          <h1 className="page-title">
+            <span className="page-title-icon">📊</span>
+            Dashboard
+          </h1>
+          <p className="page-subtitle">Real-time server metrics and performance overview</p>
         </div>
-        */}
 
-        {/* Right: Select Server aligned right */}
-        <div
-          style={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            alignItems: 'center',
-            gap: 12,
-            marginLeft: 'auto',
-            justifyContent: 'flex-end',
-          }}
-        >
+        <div className="action-row">
           <ServerSelect
             label="Select Server"
             value={selectedServerId}

@@ -1,15 +1,60 @@
 // src/pages/SettingsPage.jsx
 import React, { useEffect, useState } from 'react';
 import api from '../api/axiosConfig';
+import { useToast } from '../context/ToastContext';
 import BackupsPanel from '../components/settings/BackupsPanel';
+import AgentConfigPanel from '../components/settings/AgentConfigPanel';
+
+// Toggle Switch Component
+const ToggleSwitch = ({ checked, onChange, disabled, label }) => (
+  <label className="settings-toggle">
+    <div className={`toggle-track ${checked ? 'toggle-active' : ''} ${disabled ? 'toggle-disabled' : ''}`}>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        disabled={disabled}
+        className="toggle-input"
+      />
+      <div className="toggle-thumb" />
+    </div>
+    {label && <span className="toggle-label">{label}</span>}
+  </label>
+);
+
+// Section Header Component
+const SectionHeader = ({ icon, title, description, badge }) => (
+  <div className="settings-section-header">
+    <div className="settings-section-icon">{icon}</div>
+    <div className="settings-section-info">
+      <h3 className="settings-section-title">{title}</h3>
+      {description && <p className="settings-section-desc">{description}</p>}
+    </div>
+    {badge && <div className="settings-section-badge">{badge}</div>}
+  </div>
+);
+
+// Status Card Component
+const StatusCard = ({ icon, label, value, status }) => (
+  <div className={`settings-status-card settings-status-${status}`}>
+    <span className="settings-status-icon">{icon}</span>
+    <div className="settings-status-content">
+      <span className="settings-status-label">{label}</span>
+      <span className="settings-status-value">{value}</span>
+    </div>
+  </div>
+);
 
 const SettingsPage = () => {
+  const toast = useToast();
+  
   const [loading, setLoading] = useState(true);
   const [settings, setSettings] = useState(null);
   const [error, setError] = useState('');
 
   const [botToken, setBotToken] = useState('');
   const [savingToken, setSavingToken] = useState(false);
+  const [showToken, setShowToken] = useState(false);
 
   const [enabledBusy, setEnabledBusy] = useState(false);
 
@@ -64,6 +109,7 @@ const SettingsPage = () => {
         enabled: checked,
       });
       await loadSettings();
+      toast.success(`Telegram notifications ${checked ? 'enabled' : 'disabled'}`);
     } catch (err) {
       setError(getErrMsg(err, 'Failed to update enabled setting'));
     } finally {
@@ -82,6 +128,7 @@ const SettingsPage = () => {
       });
       setBotToken('');
       await loadSettings();
+      toast.success('Bot token updated successfully');
     } catch (err) {
       setError(getErrMsg(err, 'Failed to update bot token'));
     } finally {
@@ -102,8 +149,9 @@ const SettingsPage = () => {
       setNewChatId('');
       setNewChatLabel('');
       await loadSettings();
+      toast.success('Chat ID added successfully');
     } catch (err) {
-      setError(getErrMsg(err, 'Failed to add chat id'));
+      toast.error(getErrMsg(err, 'Failed to add chat id'));
     } finally {
       setAddingChat(false);
     }
@@ -118,8 +166,9 @@ const SettingsPage = () => {
         label: labelDraft[id] || '',
       });
       await loadSettings();
+      toast.success('Label updated');
     } catch (err) {
-      setError(getErrMsg(err, 'Failed to update label'));
+      toast.error(getErrMsg(err, 'Failed to update label'));
     } finally {
       setSavingLabelId(null);
     }
@@ -132,8 +181,9 @@ const SettingsPage = () => {
     try {
       await api.delete(`/api/notification-settings/telegram/chat-ids/${id}`);
       await loadSettings();
+      toast.success('Chat ID removed');
     } catch (err) {
-      setError(getErrMsg(err, 'Failed to delete chat id'));
+      toast.error(getErrMsg(err, 'Failed to delete chat id'));
     } finally {
       setDeletingId(null);
     }
@@ -146,9 +196,9 @@ const SettingsPage = () => {
     try {
       const res = await api.post('/api/notification-settings/telegram/test');
       const msg = res?.data?.message || (res?.data?.success ? 'Success' : 'Failed');
-      setTestMsg(msg);
+      toast.success(msg);
     } catch (err) {
-      setError(getErrMsg(err, 'Telegram test failed'));
+      toast.error(getErrMsg(err, 'Telegram test failed'));
     } finally {
       setTesting(false);
     }
@@ -159,190 +209,261 @@ const SettingsPage = () => {
   const updatedAt = settings?.updatedAtUtc
     ? new Date(settings.updatedAtUtc).toLocaleString()
     : '';
+  const chatCount = settings?.chatIds?.length || 0;
 
   return (
-    <div>
-      <div className="page-header">
-        <h1 className="page-title">Settings</h1>
+    <div className="settings-page">
+      {/* Page Header */}
+      <div className="settings-page-header">
+        <div className="settings-page-title-area">
+          <h1 className="settings-page-title">
+            <span className="settings-page-icon">⚙️</span>
+            Settings
+          </h1>
+          <p className="settings-page-subtitle">Configure your monitoring preferences and integrations</p>
+        </div>
         <button className="btn" onClick={loadSettings} disabled={loading}>
-          Refresh
+          {loading ? '⟳ Refreshing...' : '↻ Refresh'}
         </button>
       </div>
 
-      {error ? <div className="error-box">{error}</div> : null}
-      {testMsg ? <div className="notice">{testMsg}</div> : null}
+      {error && (
+        <div className="settings-error-banner">
+          <span className="settings-error-icon">⚠️</span>
+          <span>{error}</span>
+          <button className="btn btn-ghost" onClick={() => setError('')}>✕</button>
+        </div>
+      )}
+      {testMsg && <div className="notice">{testMsg}</div>}
 
-      <div className="card">
-        <h2 style={{ marginTop: 0 }}>Telegram Notification Settings</h2>
-        <p className="small" style={{ marginTop: 6 }}>
-          Manage the bot token, chat ID list, and Telegram notifications.
-        </p>
+      {/* Agent Configuration */}
+      <AgentConfigPanel />
 
-        <div className="action-row" style={{ marginTop: 10 }}>
-          <span className={`badge ${enabled ? 'badge-ok' : 'badge-muted'}`}>
-            Telegram: {enabled ? 'Enabled' : 'Disabled'}
-          </span>
-          <span className={`badge ${hasBotToken ? 'badge-ok' : 'badge-warn'}`}>
-            Bot token: {hasBotToken ? 'Set' : 'Not set'}
-          </span>
-          {updatedAt ? <span className="badge badge-muted">Updated: {updatedAt}</span> : null}
+      {/* Backups Section */}
+      <BackupsPanel />
+
+      {/* Telegram Settings Card */}
+      <div className="settings-card">
+        <div className="settings-card-header">
+          <div className="settings-card-title-area">
+            <span className="settings-card-icon">📱</span>
+            <div>
+              <h2 className="settings-card-title">Telegram Notifications</h2>
+              <p className="settings-card-subtitle">Connect your Telegram bot to receive real-time alerts</p>
+            </div>
+          </div>
+          {updatedAt && (
+            <span className="settings-updated-badge">
+              <span>🕐</span> Updated {updatedAt}
+            </span>
+          )}
+        </div>
+
+        {/* Status Overview */}
+        <div className="settings-status-grid">
+          <StatusCard
+            icon={enabled ? '✓' : '○'}
+            label="Notifications"
+            value={enabled ? 'Enabled' : 'Disabled'}
+            status={enabled ? 'success' : 'muted'}
+          />
+          <StatusCard
+            icon={hasBotToken ? '🔑' : '⚠'}
+            label="Bot Token"
+            value={hasBotToken ? 'Configured' : 'Not Set'}
+            status={hasBotToken ? 'success' : 'warning'}
+          />
+          <StatusCard
+            icon="💬"
+            label="Chat Recipients"
+            value={`${chatCount} configured`}
+            status={chatCount > 0 ? 'success' : 'muted'}
+          />
         </div>
 
         {loading ? (
-          <div style={{ marginTop: 14 }}>Loading…</div>
+          <div className="settings-loading">
+            <div className="settings-loading-spinner" />
+            <span>Loading settings...</span>
+          </div>
         ) : (
           <>
-            {/* Enable/Disable */}
-            <div style={{ marginTop: 16 }}>
-              <h3 style={{ marginBottom: 8 }}>Enable / Disable</h3>
-              <label style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                <input
-                  type="checkbox"
+            {/* Enable/Disable Section */}
+            <div className="settings-section">
+              <SectionHeader
+                icon="🔔"
+                title="Enable Notifications"
+                description="Turn Telegram notifications on or off for all alerts"
+              />
+              <div className="settings-section-content">
+                <ToggleSwitch
                   checked={enabled}
+                  onChange={handleToggleEnabled}
                   disabled={enabledBusy}
-                  onChange={(e) => handleToggleEnabled(e.target.checked)}
+                  label="Enable Telegram notifications"
                 />
-                <span className="small">Enable Telegram notifications</span>
-              </label>
-              {!hasBotToken && (
-                <div className="small" style={{ marginTop: 8 }}>
-                  Note: If there is no bot token, the enable request may be rejected by the backend.
-                </div>
-              )}
-            </div>
-
-            {/* Bot Token */}
-            <div style={{ marginTop: 16 }}>
-              <h3 style={{ marginBottom: 8 }}>Bot Token</h3>
-              <div className="form-row">
-                <div className="input-group" style={{ flex: 1 }}>
-                  <label>Bot Token</label>
-                  <input
-                    type="password"
-                    value={botToken}
-                    onChange={(e) => setBotToken(e.target.value)}
-                    placeholder={hasBotToken ? 'Token already set (enter to replace)' : 'Paste token from BotFather'}
-                  />
-                </div>
-                <button
-                  className="btn btn-primary"
-                  onClick={handleUpdateToken}
-                  disabled={savingToken || !botToken.trim()}
-                >
-                  {savingToken ? 'Saving…' : 'Update Token'}
-                </button>
+                {!hasBotToken && (
+                  <div className="settings-hint settings-hint-warning">
+                    <span>⚠️</span>
+                    <span>You need to configure a bot token before enabling notifications</span>
+                  </div>
+                )}
               </div>
             </div>
 
-            {/* Chat IDs */}
-            <div style={{ marginTop: 16 }}>
-              <h3 style={{ marginBottom: 8 }}>Chat IDs</h3>
-
-              <div className="form-row">
-                <div className="input-group">
-                  <label>Chat ID</label>
-                  <input
-                    value={newChatId}
-                    onChange={(e) => setNewChatId(e.target.value)}
-                    placeholder="123456789"
-                  />
+            {/* Bot Token Section */}
+            <div className="settings-section">
+              <SectionHeader
+                icon="🔑"
+                title="Bot Token"
+                description="Your Telegram bot token from @BotFather"
+                badge={hasBotToken ? <span className="badge badge-ok">Configured</span> : null}
+              />
+              <div className="settings-section-content">
+                <div className="settings-token-input-group">
+                  <div className="settings-input-wrapper">
+                    <input
+                      type={showToken ? 'text' : 'password'}
+                      value={botToken}
+                      onChange={(e) => setBotToken(e.target.value)}
+                      placeholder={hasBotToken ? '••••••••••••••••••••' : 'Paste your bot token here'}
+                      className="settings-input"
+                    />
+                    <button
+                      type="button"
+                      className="settings-input-addon"
+                      onClick={() => setShowToken(!showToken)}
+                      title={showToken ? 'Hide token' : 'Show token'}
+                    >
+                      {showToken ? '🙈' : '👁️'}
+                    </button>
+                  </div>
+                  <button
+                    className="btn btn-primary"
+                    onClick={handleUpdateToken}
+                    disabled={savingToken || !botToken.trim()}
+                  >
+                    {savingToken ? '⟳ Saving...' : '💾 Update Token'}
+                  </button>
                 </div>
-                <div className="input-group">
-                  <label>Label (optional)</label>
-                  <input
-                    value={newChatLabel}
-                    onChange={(e) => setNewChatLabel(e.target.value)}
-                    placeholder="Prod Alerts"
-                  />
+                <div className="settings-hint">
+                  <span>💡</span>
+                  <span>Create a bot via <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer">@BotFather</a> on Telegram to get your token</span>
                 </div>
-                <button
-                  className="btn btn-primary"
-                  onClick={handleAddChatId}
-                  disabled={addingChat || !newChatId.trim()}
-                >
-                  {addingChat ? 'Adding…' : 'Add'}
-                </button>
               </div>
+            </div>
 
-              <div style={{ marginTop: 12 }} className="table-wrap">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th style={{ width: 70 }}>ID</th>
-                      <th>Chat ID</th>
-                      <th>Label</th>
-                      <th style={{ width: 220 }}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(settings?.chatIds || []).length === 0 ? (
-                      <tr>
-                        <td colSpan={4} className="small">
-                          No chat IDs configured.
-                        </td>
-                      </tr>
-                    ) : (
-                      (settings.chatIds || []).map((c) => (
-                        <tr key={c.id}>
-                          <td>{c.id}</td>
-                          <td>{c.chatId}</td>
-                          <td>
+            {/* Chat IDs Section */}
+            <div className="settings-section">
+              <SectionHeader
+                icon="💬"
+                title="Chat Recipients"
+                description="Add chat IDs to receive notifications"
+              />
+              <div className="settings-section-content">
+                <div className="settings-add-chat-form">
+                  <div className="settings-form-field">
+                    <label className="settings-form-label">Chat ID</label>
+                    <input
+                      value={newChatId}
+                      onChange={(e) => setNewChatId(e.target.value)}
+                      placeholder="e.g. 123456789"
+                      className="settings-input"
+                    />
+                  </div>
+                  <div className="settings-form-field">
+                    <label className="settings-form-label">Label <span className="settings-optional">(optional)</span></label>
+                    <input
+                      value={newChatLabel}
+                      onChange={(e) => setNewChatLabel(e.target.value)}
+                      placeholder="e.g. Production Alerts"
+                      className="settings-input"
+                    />
+                  </div>
+                  <button
+                    className="btn btn-primary settings-add-btn"
+                    onClick={handleAddChatId}
+                    disabled={addingChat || !newChatId.trim()}
+                  >
+                    {addingChat ? '⟳ Adding...' : '+ Add Recipient'}
+                  </button>
+                </div>
+
+                {(settings?.chatIds || []).length === 0 ? (
+                  <div className="settings-empty-state">
+                    <div className="settings-empty-icon">📭</div>
+                    <div className="settings-empty-title">No recipients configured</div>
+                    <div className="settings-empty-desc">Add a chat ID to start receiving notifications</div>
+                  </div>
+                ) : (
+                  <div className="settings-chat-list">
+                    {(settings.chatIds || []).map((c) => (
+                      <div key={c.id} className="settings-chat-item">
+                        <div className="settings-chat-info">
+                          <span className="settings-chat-avatar">💬</span>
+                          <div className="settings-chat-details">
+                            <span className="settings-chat-id">{c.chatId}</span>
                             <input
                               value={labelDraft[c.id] ?? ''}
                               onChange={(e) =>
                                 setLabelDraft((prev) => ({ ...prev, [c.id]: e.target.value }))
                               }
-                              style={{
-                                width: '100%',
-                                padding: '0.45rem',
-                                borderRadius: 6,
-                                border: '1px solid #334155',
-                                background: '#020617',
-                                color: '#e5e7eb',
-                              }}
+                              placeholder="Add a label..."
+                              className="settings-chat-label-input"
                             />
-                          </td>
-                          <td>
-                            <div className="action-row">
-                              <button
-                                className="btn btn-muted"
-                                onClick={() => handleSaveLabel(c.id)}
-                                disabled={savingLabelId === c.id}
-                              >
-                                {savingLabelId === c.id ? 'Saving…' : 'Save'}
-                              </button>
-                              <button
-                                className="btn btn-danger"
-                                onClick={() => handleDeleteChatId(c.id)}
-                                disabled={deletingId === c.id}
-                              >
-                                {deletingId === c.id ? 'Deleting…' : 'Delete'}
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
+                          </div>
+                        </div>
+                        <div className="settings-chat-actions">
+                          <button
+                            className="btn btn-muted"
+                            onClick={() => handleSaveLabel(c.id)}
+                            disabled={savingLabelId === c.id}
+                          >
+                            {savingLabelId === c.id ? '⟳' : '💾'} Save
+                          </button>
+                          <button
+                            className="btn btn-danger"
+                            onClick={() => handleDeleteChatId(c.id)}
+                            disabled={deletingId === c.id}
+                          >
+                            {deletingId === c.id ? '⟳' : '🗑️'} Remove
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 
-            {/* Test */}
-            <div style={{ marginTop: 16 }}>
-              <h3 style={{ marginBottom: 8 }}>Test Telegram</h3>
-              <button className="btn btn-warning" onClick={handleTest} disabled={testing}>
-                {testing ? 'Testing…' : 'Test Connection'}
-              </button>
-              <div className="small" style={{ marginTop: 8 }}>
-                Test verifies that the backend can connect to the Telegram bot.
+            {/* Test Connection Section */}
+            <div className="settings-section settings-section-highlight">
+              <SectionHeader
+                icon="🧪"
+                title="Test Connection"
+                description="Send a test message to verify your configuration"
+              />
+              <div className="settings-section-content">
+                <div className="settings-test-area">
+                  <button
+                    className="btn btn-warning btn-lg"
+                    onClick={handleTest}
+                    disabled={testing || !enabled || !hasBotToken}
+                  >
+                    {testing ? '⟳ Sending Test...' : '📤 Send Test Message'}
+                  </button>
+                  {(!enabled || !hasBotToken) && (
+                    <div className="settings-hint settings-hint-warning">
+                      <span>⚠️</span>
+                      <span>Enable notifications and configure bot token to test</span>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </>
         )}
       </div>
-      {/* Backups (REST + SignalR) */}
-      <BackupsPanel />
     </div>
   );
 };

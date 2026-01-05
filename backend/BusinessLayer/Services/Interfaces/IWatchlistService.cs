@@ -23,14 +23,14 @@ public interface IWatchlistService
     Task RemoveServiceAsync(int serverId, string serviceName);
     
     /// <summary>
-    /// Add a process to the watchlist and update agent configuration
+    /// Add a process to the watchlist by cmdline and update agent configuration
     /// </summary>
-    Task AddProcessAsync(int serverId, string processName);
+    Task AddProcessAsync(int serverId, string cmdline);
     
     /// <summary>
-    /// Remove a process from the watchlist and update agent configuration
+    /// Remove a process from the watchlist by cmdline and update agent configuration
     /// </summary>
-    Task RemoveProcessAsync(int serverId, string processName);
+    Task RemoveProcessAsync(int serverId, string cmdline);
     
     /// <summary>
     /// Get all watched services for a server
@@ -38,7 +38,7 @@ public interface IWatchlistService
     Task<List<string>> GetWatchedServicesAsync(int serverId);
     
     /// <summary>
-    /// Get all watched processes for a server
+    /// Get all watched processes (cmdlines) for a server
     /// </summary>
     Task<List<string>> GetWatchedProcessesAsync(int serverId);
 }

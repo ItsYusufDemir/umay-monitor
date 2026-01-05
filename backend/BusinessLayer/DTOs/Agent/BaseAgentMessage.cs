@@ -62,6 +62,7 @@ public static class AgentActions
     public const string Metrics = "metrics";
     public const string WatchlistMetrics = "watchlist-metrics";
     public const string BackupCompleted = "backup-completed";
+    public const string IntegrityCheckCompleted = "integrity-check-completed";
     
     // Requests to agent
     public const string GetServerInfo = "get-server-info";
@@ -74,4 +75,6 @@ public static class AgentActions
     public const string UpdateAgentConfig = "update-agent-config";
     public const string TriggerBackup = "trigger-backup";
     public const string BrowseFilesystem = "browse-filesystem";
+    public const string GetBackupSnapshots = "get-backup-snapshots";
+    public const string CheckBackupIntegrity = "check-backup-integrity";
 }

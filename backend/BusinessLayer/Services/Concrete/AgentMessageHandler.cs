@@ -7,6 +7,7 @@ using System.Text.Json;
 using Infrastructure;
 using Infrastructure.Entities;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.EntityFrameworkCore;
 using BusinessLayer.Hubs;
 
 namespace BusinessLayer.Services.Concrete;
@@ -15,7 +16,8 @@ public class AgentMessageHandler : IAgentMessageHandler
 {
     private readonly ILogger<AgentMessageHandler> _logger;
     private readonly ServerMonitoringDbContext _dbContext;
-    private readonly IHubContext<MonitoringHub> _hubContext;
+    private readonly IHubContext<MonitoringHub> _monitoringHubContext;
+    private readonly IHubContext<NotificationHub> _notificationHubContext;
     private readonly IRequestResponseManager _requestResponseManager;
     private readonly IAlertService _alertService;
     private readonly IWatchlistAutoRestartService _watchlistAutoRestartService;
@@ -23,14 +25,16 @@ public class AgentMessageHandler : IAgentMessageHandler
     public AgentMessageHandler(
         ILogger<AgentMessageHandler> logger,
         ServerMonitoringDbContext dbContext,
-        IHubContext<MonitoringHub> hubContext,
+        IHubContext<MonitoringHub> monitoringHubContext,
+        IHubContext<NotificationHub> notificationHubContext,
         IRequestResponseManager requestResponseManager,
         IAlertService alertService,
         IWatchlistAutoRestartService watchlistAutoRestartService)
     {
         _logger = logger;
         _dbContext = dbContext;
-        _hubContext = hubContext;
+        _monitoringHubContext = monitoringHubContext;
+        _notificationHubContext = notificationHubContext;
         _requestResponseManager = requestResponseManager;
         _alertService = alertService;
         _watchlistAutoRestartService = watchlistAutoRestartService;
@@ -43,13 +47,6 @@ public class AgentMessageHandler : IAgentMessageHandler
     {
         try
         {
-            // 🆕 Log raw incoming message
-            _logger.LogInformation("=== RAW MESSAGE FROM AGENT ===");
-            _logger.LogInformation("Server ID: {ServerId}", serverId);
-            _logger.LogInformation("Message Length: {Length} bytes", message.Length);
-            _logger.LogInformation("Full Message: {Message}", message);
-            _logger.LogInformation("================================");
-
             var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
             var baseMessage = JsonSerializer.Deserialize<BaseAgentMessage>(message, options);
 
@@ -59,9 +56,12 @@ public class AgentMessageHandler : IAgentMessageHandler
                 return;
             }
 
-            // Log message type and action for all messages
-            _logger.LogInformation("Received {Type} message - Action: '{Action}', ID: {Id} from server {ServerId}", 
-                baseMessage.Type, baseMessage.Action, baseMessage.Id, serverId);
+            // Log raw message except for high-frequency metrics
+            if (baseMessage.Action != AgentActions.Metrics && baseMessage.Action != AgentActions.WatchlistMetrics)
+            {
+                _logger.LogInformation("📩 Incoming from Agent {ServerId} | Type: {Type} | Action: {Action} | Message: {Message}", 
+                    serverId, baseMessage.Type, baseMessage.Action, message);
+            }
 
             // Route based on message type
             switch (baseMessage.Type)
@@ -75,7 +75,7 @@ public class AgentMessageHandler : IAgentMessageHandler
                     break;
 
                 case MessageTypes.Request:
-                    _logger.LogInformation("Received request from agent (unexpected): {Action}", baseMessage.Action);
+                    _logger.LogDebug("Received request from agent (unexpected): {Action}", baseMessage.Action);
                     break;
 
                 default:
@@ -85,8 +85,7 @@ public class AgentMessageHandler : IAgentMessageHandler
         }
         catch (JsonException ex)
         {
-            _logger.LogError(ex, "Failed to parse WebSocket message from server {ServerId}. Message: {Message}", 
-                serverId, message);
+            _logger.LogError(ex, "Failed to parse WebSocket message from server {ServerId}", serverId);
         }
         catch (Exception ex)
         {
@@ -104,10 +103,6 @@ public class AgentMessageHandler : IAgentMessageHandler
                 {
                     await ProcessMetrics(serverId, metrics);
                 }
-                else
-                {
-                    _logger.LogWarning("Failed to deserialize metrics payload for server {ServerId}", serverId);
-                }
                 break;
 
             case AgentActions.WatchlistMetrics:
@@ -115,10 +110,6 @@ public class AgentMessageHandler : IAgentMessageHandler
                 if (watchlistMetrics != null)
                 {
                     await ProcessWatchlistMetrics(serverId, watchlistMetrics);
-                }
-                else
-                {
-                    _logger.LogWarning("Failed to deserialize watchlist metrics payload for server {ServerId}", serverId);
                 }
                 break;
 
@@ -134,6 +125,18 @@ public class AgentMessageHandler : IAgentMessageHandler
                 }
                 break;
 
+            case AgentActions.IntegrityCheckCompleted:
+                var integrityEvent = baseMessage.Payload.Deserialize<BusinessLayer.DTOs.Agent.Backup.IntegrityCheckCompletedEvent>(options);
+                if (integrityEvent != null)
+                {
+                    await ProcessIntegrityCheckCompleted(serverId, integrityEvent);
+                }
+                else
+                {
+                    _logger.LogWarning("Failed to deserialize integrity-check-completed payload for server {ServerId}", serverId);
+                }
+                break;
+
             default:
                 _logger.LogWarning("Unknown event action: {Action} from server {ServerId}", baseMessage.Action, serverId);
                 break;
@@ -142,51 +145,50 @@ public class AgentMessageHandler : IAgentMessageHandler
 
     private async Task HandleResponse(int serverId, BaseAgentMessage baseMessage, JsonSerializerOptions options)
     {        
-        _logger.LogInformation("=== RESPONSE RECEIVED ===");
-        _logger.LogInformation("Server ID: {ServerId}", serverId);
-        _logger.LogInformation("Message ID: {MessageId}", baseMessage.Id);
-        _logger.LogInformation("Action: {Action}", baseMessage.Action);
-        _logger.LogInformation("Full message: {Message}", System.Text.Json.JsonSerializer.Serialize(baseMessage));
-                
         // Serialize the full message for the waiting handler
         var responseJson = JsonSerializer.Serialize(baseMessage, options);
                 
         // Complete the pending request
         var completed = _requestResponseManager.CompleteRequest(baseMessage.Id, responseJson);
-                
+        
         if (!completed)
         {
-            _logger.LogWarning("Received response for unknown request ID {Id} from server {ServerId}", 
-                baseMessage.Id, serverId);
-            _logger.LogWarning("This might mean the request already timed out or ID mismatch");
-        }
-        else
-        {
-            _logger.LogInformation("Successfully matched response to pending request ID {Id}", baseMessage.Id);
-                        
-            // Broadcast success event via SignalR
-            try
+            _logger.LogWarning(
+                "⚠️ Response with ID {ResponseId} from server {ServerId} for action '{Action}' did not match any pending request. " +
+                "Attempting to find matching request by action...",
+                baseMessage.Id, serverId, baseMessage.Action);
+            
+            // Try to find a pending request for the same action and server (ID mismatch recovery)
+            var pendingRequests = _requestResponseManager.GetPendingRequests()
+                .Where(r => r.ServerId == serverId && r.Action == baseMessage.Action)
+                .ToList();
+            
+            if (pendingRequests.Count == 1)
             {
-                await _hubContext.Clients.Group($"server-{serverId}")
-                    .SendAsync("CommandSuccess", new
-                    {
-                        ServerId = serverId,
-                        Action = baseMessage.Action,
-                        MessageId = baseMessage.Id,
-                        Message = $"Command '{baseMessage.Action}' executed successfully",
-                        Timestamp = DateTime.UtcNow
-                    });
-                                
-                _logger.LogDebug("Broadcast CommandSuccess for action '{Action}' on server {ServerId}", 
+                // Found exactly one matching request - complete it
+                var matchedRequest = pendingRequests[0];
+                _logger.LogInformation(
+                    "🔧 Found matching pending request {MessageId} for action '{Action}' on server {ServerId}. " +
+                    "Agent responded with ID {ResponseId} but expected {ExpectedId}. Completing request.",
+                    matchedRequest.MessageId, baseMessage.Action, serverId, baseMessage.Id, matchedRequest.MessageId);
+                
+                _requestResponseManager.CompleteRequest(matchedRequest.MessageId, responseJson);
+            }
+            else if (pendingRequests.Count > 1)
+            {
+                _logger.LogWarning(
+                    "⚠️ Multiple pending requests ({Count}) found for action '{Action}' on server {ServerId}. " +
+                    "Cannot auto-match response with ID {ResponseId}.",
+                    pendingRequests.Count, baseMessage.Action, serverId, baseMessage.Id);
+            }
+            else
+            {
+                _logger.LogDebug(
+                    "No pending request found for action '{Action}' on server {ServerId}. " +
+                    "Response may have arrived after timeout.",
                     baseMessage.Action, serverId);
             }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to broadcast CommandSuccess event");
-            }
         }
-        
-        _logger.LogInformation("=== RESPONSE HANDLING COMPLETE ===");
     }
 
     private async Task ProcessMetrics(int serverId, MetricsPayload payload)
@@ -273,7 +275,7 @@ public class AgentMessageHandler : IAgentMessageHandler
             }).ToList()
         };
 
-        await _hubContext.Clients.Group($"server-{serverId}").SendAsync("MetricsUpdated", metricDto);
+        await _monitoringHubContext.Clients.Group($"server-{serverId}").SendAsync("MetricsUpdated", metricDto);
 
         _logger.LogDebug("📡 Broadcast metrics via SignalR for server {ServerId}", serverId);
 
@@ -287,7 +289,7 @@ public class AgentMessageHandler : IAgentMessageHandler
             serverId, payload.Services.Count, payload.Processes.Count);
 
         // Broadcast via SignalR to subscribed frontend clients
-        await _hubContext.Clients.Group($"server-{serverId}").SendAsync("WatchlistMetricsUpdated", new
+        await _monitoringHubContext.Clients.Group($"server-{serverId}").SendAsync("WatchlistMetricsUpdated", new
         {
             ServerId = serverId,
             TimestampUtc = DateTime.UtcNow,
@@ -311,18 +313,14 @@ public class AgentMessageHandler : IAgentMessageHandler
     {
         try
         {
-            _logger.LogError("Broadcasting CommandFailed for action '{Action}' on server {ServerId}", 
-                request.Action, request.ServerId);
-            
-            await _hubContext.Clients.Group($"server-{request.ServerId}")
-                .SendAsync("CommandFailed", new
-                {
-                    ServerId = request.ServerId,
-                    Action = request.Action,
-                    MessageId = request.MessageId,
-                    Message = $"Command '{request.Action}' failed after {request.RetryCount} retries",
-                    Timestamp = DateTime.UtcNow
-                });
+            // Broadcast command failed notification to ALL connected clients via NotificationHub
+            await _notificationHubContext.BroadcastCommandFailed(
+                request.ServerId,
+                request.Action,
+                request.MessageId,
+                $"Command '{request.Action}' failed after {request.RetryCount} retries",
+                request.RetryCount,
+                _logger);
         }
         catch (Exception ex)
         {
@@ -339,65 +337,146 @@ public class AgentMessageHandler : IAgentMessageHandler
             "Backup completed event received for server {ServerId}, TaskId: {TaskId}, Status: {Status}",
             serverId, backupEvent.TaskId, backupEvent.Result.Status);
 
-        // Parse taskId (which is the backup log ID)
-        if (!Guid.TryParse(backupEvent.TaskId, out var taskId))
-        {
-            _logger.LogError("Invalid taskId format in backup-completed event: {TaskId}", backupEvent.TaskId);
-            return;
-        }
-
-        // Find the backup log entry
-        var log = await _dbContext.BackupLogs.FindAsync(taskId);
-        if (log == null)
-        {
-            _logger.LogWarning("Backup log not found for taskId {TaskId}", taskId);
-            return;
-        }
-
-        // Update log with results
-        log.Status = backupEvent.Result.Status == "ok" ? "success" : "error";
-        log.SnapshotId = backupEvent.Result.SnapshotId;
-        log.FilesNew = backupEvent.Result.FilesNew;
-        log.DataAdded = backupEvent.Result.DataAdded;
-        log.DurationSeconds = backupEvent.Result.Duration;
-        log.ErrorMessage = backupEvent.Result.ErrorMessage;
-
-        await _dbContext.SaveChangesAsync();
-
-        // Update job status
-        var job = await _dbContext.BackupJobs.FindAsync(log.JobId);
-        if (job != null)
-        {
-            job.LastRunStatus = log.Status;
-            job.LastRunAtUtc = DateTime.UtcNow;
-            await _dbContext.SaveChangesAsync();
-        }
-
-        _logger.LogInformation(
-            "Updated backup log {LogId} for job {JobId} with status {Status}",
-            taskId, log.JobId, log.Status);
-
-        // Broadcast backup completion event via SignalR (optional - for real-time UI updates)
         try
         {
-            await _hubContext.Clients.Group($"server-{serverId}")
-                .SendAsync("BackupCompleted", new
-                {
-                    ServerId = serverId,
-                    JobId = log.JobId,
-                    TaskId = taskId,
-                    Status = log.Status,
-                    SnapshotId = log.SnapshotId,
-                    FilesNew = log.FilesNew,
-                    DataAdded = log.DataAdded,
-                    DurationSeconds = log.DurationSeconds,
-                    ErrorMessage = log.ErrorMessage,
-                    Timestamp = DateTime.UtcNow
-                });
+            // Parse taskId (which is the backup log ID)
+            if (!Guid.TryParse(backupEvent.TaskId, out var taskId))
+            {
+                _logger.LogError("Invalid taskId format in backup-completed event: {TaskId}", backupEvent.TaskId);
+                return;
+            }
+
+            // Find the backup log entry
+            var log = await _dbContext.BackupLogs.FindAsync(taskId);
+            if (log == null)
+            {
+                _logger.LogWarning("Backup log not found for taskId {TaskId}", taskId);
+                return;
+            }
+
+            // Store short snapshot ID (first 8 characters) for consistency with restic
+            var shortSnapshotId = !string.IsNullOrEmpty(backupEvent.Result.SnapshotId) && backupEvent.Result.SnapshotId.Length >= 8
+                ? backupEvent.Result.SnapshotId[..8]
+                : backupEvent.Result.SnapshotId;
+
+            // Update log with results
+            log.Status = backupEvent.Result.Status == "ok" ? "success" : "error";
+            log.Message = backupEvent.Result.Status == "ok" ? "Backup completed successfully" : "Backup failed";
+            log.SnapshotId = shortSnapshotId;
+            log.FilesNew = backupEvent.Result.FilesNew;
+            log.DataAdded = backupEvent.Result.DataAdded;
+            log.DurationSeconds = backupEvent.Result.Duration;
+            log.ErrorMessage = backupEvent.Result.ErrorMessage;
+
+            await _dbContext.SaveChangesAsync();
+
+            _logger.LogInformation(
+                "Updated backup log {LogId} with status {Status}, SnapshotId: {SnapshotId}",
+                taskId, log.Status, log.SnapshotId);
+
+            // Update job status using ExecuteUpdateAsync for reliable update
+            _logger.LogInformation("🔍 Updating backup job {JobId} status to '{Status}'", log.JobId, log.Status);
+            
+            var updatedRows = await _dbContext.BackupJobs
+                .Where(j => j.Id == log.JobId)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(j => j.LastRunStatus, log.Status)
+                    .SetProperty(j => j.LastRunAtUtc, DateTime.UtcNow));
+            
+            if (updatedRows > 0)
+            {
+                _logger.LogInformation(
+                    "✅ Successfully updated job {JobId}: Status='{Status}', Rows affected={Rows}",
+                    log.JobId, log.Status, updatedRows);
+            }
+            else
+            {
+                _logger.LogError("❌ Failed to update backup job {JobId} - no rows affected", log.JobId);
+            }
+
+            _logger.LogInformation(
+                "Backup processing completed for log {LogId} and job {JobId}. Now broadcasting notification...",
+                taskId, log.JobId);
+
+            // Broadcast backup completion notification to ALL connected clients via NotificationHub
+            await _notificationHubContext.BroadcastBackupCompleted(
+                serverId,
+                log.JobId,
+                taskId,
+                log.Status,
+                log.Message ?? "Backup completed",
+                log.SnapshotId,
+                log.FilesNew,
+                log.DataAdded,
+                log.DurationSeconds,
+                log.ErrorMessage,
+                _logger);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to broadcast BackupCompleted event");
+            _logger.LogError(ex, "❌ Error in ProcessBackupCompleted for server {ServerId}, TaskId: {TaskId}", 
+                serverId, backupEvent.TaskId);
+        }
+    }
+
+    /// <summary>
+    /// Process integrity-check-completed event from agent
+    /// </summary>
+    private async Task ProcessIntegrityCheckCompleted(int serverId, BusinessLayer.DTOs.Agent.Backup.IntegrityCheckCompletedEvent integrityEvent)
+    {
+        _logger.LogInformation(
+            "Integrity check completed event received for server {ServerId}, TaskId: {TaskId}, Status: {Status}",
+            serverId, integrityEvent.TaskId, integrityEvent.Result.Status);
+
+        try
+        {
+            // Parse taskId (which is the backup log ID used for tracking)
+            if (!Guid.TryParse(integrityEvent.TaskId, out var taskId))
+            {
+                _logger.LogError("Invalid taskId format in integrity-check-completed event: {TaskId}", integrityEvent.TaskId);
+                return;
+            }
+
+            // Find the backup log entry (we reuse backup_logs table for integrity checks)
+            var log = await _dbContext.BackupLogs.FindAsync(taskId);
+            if (log == null)
+            {
+                _logger.LogWarning("Backup log not found for integrity check taskId {TaskId}", taskId);
+                return;
+            }
+
+            // Update log with results - use Message for description, ErrorMessage only for errors
+            log.Status = integrityEvent.Result.Status == "ok" ? "success" : "error";
+            log.Message = integrityEvent.Result.Status == "ok" 
+                ? "Integrity check passed" 
+                : "Integrity check failed";
+            
+            if (integrityEvent.Result.Status != "ok")
+            {
+                log.ErrorMessage = integrityEvent.Result.Message;
+            }
+            log.DurationSeconds = 0;
+
+            await _dbContext.SaveChangesAsync();
+
+            _logger.LogInformation(
+                "Updated integrity check log {LogId} for job {JobId} with status {Status}. Now broadcasting notification...",
+                taskId, log.JobId, log.Status);
+
+            // Broadcast integrity check completion notification to ALL connected clients via NotificationHub
+            await _notificationHubContext.BroadcastIntegrityCheckCompleted(
+                serverId,
+                log.JobId,
+                taskId,
+                log.Status,
+                log.Message ?? "Integrity check completed",
+                log.ErrorMessage,
+                _logger);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Error in ProcessIntegrityCheckCompleted for server {ServerId}, TaskId: {TaskId}", 
+                serverId, integrityEvent.TaskId);
         }
     }
 }

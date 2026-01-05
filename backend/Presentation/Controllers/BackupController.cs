@@ -1,5 +1,6 @@
 using BusinessLayer.DTOs.Backup;
 using BusinessLayer.Services.Interfaces;
+using BusinessLayer.DTOs.Agent;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -15,15 +16,18 @@ public class BackupController : ControllerBase
 {
     private readonly IBackupJobService _backupJobService;
     private readonly IBackupSchedulerService _schedulerService;
+    private readonly IAgentCommandService _agentCommandService;
     private readonly ILogger<BackupController> _logger;
 
     public BackupController(
         IBackupJobService backupJobService,
         IBackupSchedulerService schedulerService,
+        IAgentCommandService agentCommandService,
         ILogger<BackupController> logger)
     {
         _backupJobService = backupJobService;
         _schedulerService = schedulerService;
+        _agentCommandService = agentCommandService;
         _logger = logger;
     }
 
@@ -33,7 +37,7 @@ public class BackupController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> CreateBackupJob([FromBody] CreateBackupJobRequest request)
     {
-        _logger.LogInformation("Creating backup job {JobName} for agent {AgentId}", 
+        _logger.LogInformation("Creating backup job {JobName} for agent {AgentId}",
             request.Name, request.AgentId);
 
         if (!ModelState.IsValid)
@@ -73,6 +77,55 @@ public class BackupController : ControllerBase
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error retrieving backup jobs");
+            return StatusCode(500, new { error = "Internal server error" });
+        }
+    }
+
+    /// <summary>
+    /// Browse filesystem on agent to select backup source directories
+    /// </summary>
+    [HttpPost("browse/{agentId}")]
+    public async Task<IActionResult> BrowseFilesystem(int agentId, [FromBody] BrowseFilesystemRequest request)
+    {
+        _logger.LogInformation("Browsing filesystem on agent {AgentId}, path: {Path}", agentId, request.Path);
+
+        try
+        {
+            var payload = new BusinessLayer.DTOs.Agent.Backup.BrowseFilesystemPayload
+            {
+                Path = request.Path ?? "/"
+            };
+
+            var response = await _agentCommandService.SendCommandAsync<
+                BusinessLayer.DTOs.Agent.Backup.BrowseFilesystemPayload,
+                BusinessLayer.DTOs.Agent.Backup.BrowseFilesystemResponse>(
+                agentId,
+                AgentActions.BrowseFilesystem,
+                payload,
+                TimeSpan.FromSeconds(10));
+
+            if (response.Status != "ok" || response.Data == null)
+            {
+                _logger.LogWarning("Failed to browse filesystem on agent {AgentId}: {Message}",
+                    agentId, response.Message);
+                return BadRequest(new { error = response.Message ?? "Failed to browse filesystem" });
+            }
+
+            return Ok(response.Data);
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogWarning(ex, "Agent {AgentId} is not connected", agentId);
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (TimeoutException)
+        {
+            _logger.LogWarning("Timeout browsing filesystem on agent {AgentId}", agentId);
+            return StatusCode(504, new { error = "Request timeout - agent did not respond" });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error browsing filesystem on agent {AgentId}", agentId);
             return StatusCode(500, new { error = "Internal server error" });
         }
     }
@@ -158,8 +211,8 @@ public class BackupController : ControllerBase
         try
         {
             var taskId = await _schedulerService.TriggerBackupJobAsync(id);
-            return Ok(new 
-            { 
+            return Ok(new
+            {
                 message = "Backup triggered successfully",
                 jobId = id,
                 taskId = taskId
@@ -196,38 +249,61 @@ public class BackupController : ControllerBase
     }
 
     /// <summary>
-    /// Gets snapshots from the backup repository (placeholder - requires Restic integration)
+    /// Gets snapshots from the backup repository via agent
     /// </summary>
     [HttpGet("{id}/snapshots")]
     public async Task<IActionResult> GetBackupSnapshots(Guid id)
     {
-        // TODO: Implement Restic snapshots command via agent
-        // For now, return logs as a temporary implementation
+        _logger.LogInformation("Getting snapshots for backup job {JobId}", id);
+
         try
         {
-            var job = await _backupJobService.GetBackupJobByIdAsync(id);
-            if (job == null)
-                return NotFound(new { error = "Backup job not found" });
-
-            var logs = await _backupJobService.GetBackupLogsAsync(id, 100);
-            
-            var snapshots = logs
-                .Where(l => l.Status == "success" && !string.IsNullOrEmpty(l.SnapshotId))
-                .Select(l => new BackupSnapshotDto
-                {
-                    Id = l.SnapshotId!,
-                    Time = l.CreatedAtUtc,
-                    Hostname = job.AgentName,
-                    Paths = new[] { job.SourcePath },
-                    Size = l.DataAdded
-                })
-                .ToList();
-
+            var snapshots = await _backupJobService.GetSnapshotsFromAgentAsync(id);
             return Ok(snapshots);
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogWarning(ex, "Failed to get snapshots for job {JobId}: {Message}", id, ex.Message);
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (TimeoutException)
+        {
+            _logger.LogWarning("Timeout getting snapshots for job {JobId}", id);
+            return StatusCode(504, new { error = "Request timeout - agent did not respond" });
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error retrieving snapshots for backup job {JobId}", id);
+            return StatusCode(500, new { error = "Internal server error" });
+        }
+    }
+
+    /// <summary>
+    /// Triggers an integrity check for a backup job's repository
+    /// </summary>
+    [HttpPost("{id}/integrity-check")]
+    public async Task<IActionResult> TriggerIntegrityCheck(Guid id)
+    {
+        _logger.LogInformation("Integrity check requested for backup job {JobId}", id);
+
+        try
+        {
+            var taskId = await _backupJobService.TriggerIntegrityCheckAsync(id);
+            return Ok(new
+            {
+                message = "Integrity check triggered successfully",
+                jobId = id,
+                taskId = taskId
+            });
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogWarning(ex, "Failed to trigger integrity check for job {JobId}: {Message}", id, ex.Message);
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error triggering integrity check for job {JobId}", id);
             return StatusCode(500, new { error = "Internal server error" });
         }
     }

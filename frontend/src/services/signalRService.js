@@ -2,231 +2,412 @@
 import * as signalR from '@microsoft/signalr';
 
 /**
- * Thin wrapper around a single shared SignalR connection.
- * Keeps backward-compatible method names used across the app.
- *
- * IMPORTANT:
- * We intentionally DO NOT set `skipNegotiation: true` because the frontend
- * relies on a server-issued `connectionId` for REST subscribe calls
- * (`X-SignalR-ConnectionId`). Some environments may not populate `connectionId`
- * when negotiation is skipped.
+ * Multi-hub SignalR service supporting three separate hubs:
+ * - MonitoringHub: Server-specific metrics (requires subscription)
+ * - NotificationHub: Backup/command notifications (broadcast)
+ * - AlertHub: Alert notifications (broadcast)
  */
 class SignalRService {
   /** @type {signalR.HubConnection | null} */
-  connection = null;
+  monitoringConnection = null;
+  /** @type {signalR.HubConnection | null} */
+  notificationConnection = null;
+  /** @type {signalR.HubConnection | null} */
+  alertConnection = null;
+
   /** @type {string | null} */
-  connectionId = null;
+  monitoringConnectionId = null;
+  
   /** @type {Promise<void> | null} */
-  _connectingPromise = null;
+  _monitoringConnectingPromise = null;
+  /** @type {Promise<void> | null} */
+  _notificationConnectingPromise = null;
+  /** @type {Promise<void> | null} */
+  _alertConnectingPromise = null;
 
-  _hubUrl() {
-    return (
-      process.env.REACT_APP_SIGNALR_HUB ||
-      `${process.env.REACT_APP_API_BASE_URL || 'https://localhost:7287'}/monitoring-hub`
-    );
+  _getBaseUrl() {
+    return process.env.REACT_APP_API_BASE_URL || 'https://localhost:7287';
+  }
+
+  _hubUrl(hubName) {
+    return `${this._getBaseUrl()}/${hubName}`;
+  }
+
+  _hubUrl(hubName) {
+    return `${this._getBaseUrl()}/${hubName}`;
   }
 
   /**
-   * Wait until SignalR client has a usable connectionId.
-   * @param {number} timeoutMs
-   * @returns {Promise<string|null>}
+   * Create a SignalR connection for a specific hub
+   * @param {string} hubName - 'monitoring-hub', 'notification-hub', or 'alert-hub'
+   * @param {string} jwtToken
+   * @param {boolean} needsConnectionId - Whether this hub needs a connectionId (for subscription)
+   * @returns {signalR.HubConnection}
    */
-  async waitForConnectionId(timeoutMs = 5000) {
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-      const cid = this.connection?.connectionId || this.connectionId;
-      if (cid) {
-        this.connectionId = cid;
-        return cid;
-      }
-      // eslint-disable-next-line no-await-in-loop
-      await new Promise((r) => setTimeout(r, 100));
+  _createConnection(hubName, jwtToken, needsConnectionId = false) {
+    const config = {
+      accessTokenFactory: () => jwtToken,
+      transport: signalR.HttpTransportType.WebSockets
+    };
+    
+    // Only skip negotiation for hubs that don't need connectionId
+    if (!needsConnectionId) {
+      config.skipNegotiation = true;
     }
-    const cid = this.connection?.connectionId || this.connectionId;
-    if (cid) this.connectionId = cid;
-    return cid || null;
+    
+    return new signalR.HubConnectionBuilder()
+      .withUrl(this._hubUrl(hubName), config)
+      .withAutomaticReconnect([0, 2000, 5000, 10000, 30000])
+      .configureLogging(signalR.LogLevel.Information)
+      .build();
   }
 
   /**
-   * Ensure connectionId is available (best-effort).
-   * @param {number} timeoutMs
-   */
-  async ensureConnectionId(timeoutMs = 5000) {
-    const cid = this.getConnectionId();
-    if (cid) return cid;
-    return this.waitForConnectionId(timeoutMs);
-  }
-
-  /**
-   * Connect to hub with JWT auth. Safe to call multiple times.
+   * Connect to MonitoringHub (server-specific metrics)
    * @param {string} jwtToken
    */
-  async connect(jwtToken) {
+  async connectMonitoring(jwtToken) {
     if (!jwtToken) throw new Error('Missing JWT token for SignalR');
 
     // Already connected
-    if (this.connection?.state === signalR.HubConnectionState.Connected) {
-      await this.ensureConnectionId();
+    if (this.monitoringConnection?.state === signalR.HubConnectionState.Connected) {
       return;
     }
 
     // De-dupe concurrent connection attempts
-    if (this._connectingPromise) {
-      await this._connectingPromise;
-      await this.ensureConnectionId();
+    if (this._monitoringConnectingPromise) {
+      await this._monitoringConnectingPromise;
       return;
     }
 
     // Clean up any old connection instance
-    if (this.connection) {
+    if (this.monitoringConnection) {
       try {
-        this.removeAllListeners();
-        await this.connection.stop();
+        this.monitoringConnection.off('MetricsUpdated');
+        this.monitoringConnection.off('WatchlistMetricsUpdated');
+        await this.monitoringConnection.stop();
       } catch {
         // ignore
       } finally {
-        this.connection = null;
-        this.connectionId = null;
+        this.monitoringConnection = null;
+        this.monitoringConnectionId = null;
       }
     }
 
-    const hubUrl = this._hubUrl();
+    this.monitoringConnection = this._createConnection('monitoring-hub', jwtToken, true); // needs connectionId
 
-    this.connection = new signalR.HubConnectionBuilder()
-      .withUrl(hubUrl, {
-        accessTokenFactory: () => jwtToken,
-        // Prefer WebSockets, but keep negotiation enabled so the server can
-        // provide a stable connectionId.
-        transport: signalR.HttpTransportType.WebSockets,
-      })
-      .withAutomaticReconnect([0, 2000, 5000, 10000, 30000])
-      .configureLogging(signalR.LogLevel.Information)
-      .build();
-
-    this.connection.onreconnecting((err) => {
-      console.warn('SignalR reconnecting:', err);
-      this.connectionId = null;
+    this.monitoringConnection.onreconnecting((err) => {
+      console.warn('MonitoringHub reconnecting:', err);
+      this.monitoringConnectionId = null;
     });
 
-    this.connection.onreconnected((cid) => {
-      const next = cid || this.connection?.connectionId || null;
-      this.connectionId = next;
-      console.log('SignalR reconnected. ConnectionId:', next);
+    this.monitoringConnection.onreconnected((cid) => {
+      const next = cid || this.monitoringConnection?.connectionId || null;
+      this.monitoringConnectionId = next;
+      console.log('MonitoringHub reconnected. ConnectionId:', next);
     });
 
-    this.connection.onclose((err) => {
-      console.warn('SignalR closed:', err);
-      this.connectionId = null;
+    this.monitoringConnection.onclose((err) => {
+      console.warn('MonitoringHub closed:', err);
+      this.monitoringConnectionId = null;
     });
 
-    this._connectingPromise = (async () => {
+    this._monitoringConnectingPromise = (async () => {
       try {
-        await this.connection.start();
-        this.connectionId = this.connection.connectionId || null;
-        await this.ensureConnectionId();
-        console.log('✅ SignalR connected. ConnectionId:', this.connectionId);
+        await this.monitoringConnection.start();
+        this.monitoringConnectionId = this.monitoringConnection.connectionId || null;
+        console.log('✅ MonitoringHub connected. ConnectionId:', this.monitoringConnectionId);
       } finally {
-        this._connectingPromise = null;
+        this._monitoringConnectingPromise = null;
       }
     })();
 
-    await this._connectingPromise;
+    await this._monitoringConnectingPromise;
   }
 
-  async disconnect() {
-    if (!this.connection) return;
+  /**
+   * Connect to NotificationHub (backup/command notifications)
+   * @param {string} jwtToken
+   */
+  async connectNotification(jwtToken) {
+    if (!jwtToken) throw new Error('Missing JWT token for SignalR');
+
+    if (this.notificationConnection?.state === signalR.HubConnectionState.Connected) {
+      return;
+    }
+
+    if (this._notificationConnectingPromise) {
+      await this._notificationConnectingPromise;
+      return;
+    }
+
+    if (this.notificationConnection) {
+      try {
+        this.notificationConnection.off('BackupCompleted');
+        this.notificationConnection.off('IntegrityCheckCompleted');
+        this.notificationConnection.off('CommandSuccess');
+        this.notificationConnection.off('CommandFailed');
+        await this.notificationConnection.stop();
+      } catch {
+        // ignore
+      } finally {
+        this.notificationConnection = null;
+      }
+    }
+
+    this.notificationConnection = this._createConnection('notification-hub', jwtToken, false); // no connectionId needed
+
+    this.notificationConnection.onreconnecting((err) => {
+      console.warn('NotificationHub reconnecting:', err);
+    });
+
+    this.notificationConnection.onreconnected(() => {
+      console.log('NotificationHub reconnected');
+    });
+
+    this.notificationConnection.onclose((err) => {
+      console.warn('NotificationHub closed:', err);
+    });
+
+    this._notificationConnectingPromise = (async () => {
+      try {
+        await this.notificationConnection.start();
+        console.log('✅ NotificationHub connected');
+      } finally {
+        this._notificationConnectingPromise = null;
+      }
+    })();
+
+    await this._notificationConnectingPromise;
+  }
+
+  /**
+   * Connect to AlertHub (alert notifications)
+   * @param {string} jwtToken
+   */
+  async connectAlert(jwtToken) {
+    if (!jwtToken) throw new Error('Missing JWT token for SignalR');
+
+    if (this.alertConnection?.state === signalR.HubConnectionState.Connected) {
+      return;
+    }
+
+    if (this._alertConnectingPromise) {
+      await this._alertConnectingPromise;
+      return;
+    }
+
+    if (this.alertConnection) {
+      try {
+        this.alertConnection.off('AlertTriggered');
+        this.alertConnection.off('ServiceRestartAttempted');
+        await this.alertConnection.stop();
+      } catch {
+        // ignore
+      } finally {
+        this.alertConnection = null;
+      }
+    }
+
+    this.alertConnection = this._createConnection('alert-hub', jwtToken, false); // no connectionId needed
+
+    this.alertConnection.onreconnecting((err) => {
+      console.warn('AlertHub reconnecting:', err);
+    });
+
+    this.alertConnection.onreconnected(() => {
+      console.log('AlertHub reconnected');
+    });
+
+    this.alertConnection.onclose((err) => {
+      console.warn('AlertHub closed:', err);
+    });
+
+    this._alertConnectingPromise = (async () => {
+      try {
+        await this.alertConnection.start();
+        console.log('✅ AlertHub connected');
+      } finally {
+        this._alertConnectingPromise = null;
+      }
+    })();
+
+    await this._alertConnectingPromise;
+  }
+
+  /**
+   * Connect to all hubs
+   * @param {string} jwtToken
+   */
+  async connect(jwtToken) {
+    await Promise.all([
+      this.connectMonitoring(jwtToken),
+      this.connectNotification(jwtToken),
+      this.connectAlert(jwtToken)
+    ]);
+  }
+
+  async disconnectMonitoring() {
+    if (!this.monitoringConnection) return;
     try {
-      this.removeAllListeners();
-      await this.connection.stop();
+      this.monitoringConnection.off('MetricsUpdated');
+      this.monitoringConnection.off('WatchlistMetricsUpdated');
+      await this.monitoringConnection.stop();
     } finally {
-      this.connection = null;
-      this.connectionId = null;
-      this._connectingPromise = null;
-      console.log('SignalR disconnected');
+      this.monitoringConnection = null;
+      this.monitoringConnectionId = null;
+      this._monitoringConnectingPromise = null;
+      console.log('MonitoringHub disconnected');
     }
   }
 
+  async disconnectNotification() {
+    if (!this.notificationConnection) return;
+    try {
+      this.notificationConnection.off('BackupCompleted');
+      this.notificationConnection.off('IntegrityCheckCompleted');
+      this.notificationConnection.off('CommandSuccess');
+      this.notificationConnection.off('CommandFailed');
+      await this.notificationConnection.stop();
+    } finally {
+      this.notificationConnection = null;
+      this._notificationConnectingPromise = null;
+      console.log('NotificationHub disconnected');
+    }
+  }
+
+  async disconnectAlert() {
+    if (!this.alertConnection) return;
+    try {
+      this.alertConnection.off('AlertTriggered');
+      this.alertConnection.off('ServiceRestartAttempted');
+      await this.alertConnection.stop();
+    } finally {
+      this.alertConnection = null;
+      this._alertConnectingPromise = null;
+      console.log('AlertHub disconnected');
+    }
+  }
+
+  async disconnect() {
+    await Promise.all([
+      this.disconnectMonitoring(),
+      this.disconnectNotification(),
+      this.disconnectAlert()
+    ]);
+  }
+
   isConnected() {
-    return this.connection?.state === signalR.HubConnectionState.Connected;
+    return this.monitoringConnection?.state === signalR.HubConnectionState.Connected ||
+           this.notificationConnection?.state === signalR.HubConnectionState.Connected ||
+           this.alertConnection?.state === signalR.HubConnectionState.Connected;
+  }
+
+  isMonitoringConnected() {
+    return this.monitoringConnection?.state === signalR.HubConnectionState.Connected;
+  }
+
+  isNotificationConnected() {
+    return this.notificationConnection?.state === signalR.HubConnectionState.Connected;
+  }
+
+  isAlertConnected() {
+    return this.alertConnection?.state === signalR.HubConnectionState.Connected;
+  }
+
+  getMonitoringConnectionId() {
+    return this.monitoringConnection?.connectionId || this.monitoringConnectionId || null;
   }
 
   getConnectionId() {
-    return this.connection?.connectionId || this.connectionId || null;
+    // Backward compatibility - return monitoring connection ID
+    return this.getMonitoringConnectionId();
   }
 
   getState() {
-    return this.connection?.state || null;
+    return this.monitoringConnection?.state || null;
   }
 
   /** @private */
-  _ensureConnected() {
-    if (!this.connection) throw new Error('SignalR not connected');
+  _ensureMonitoringConnected() {
+    if (!this.monitoringConnection) throw new Error('MonitoringHub not connected');
   }
 
   /** @private */
-  _on(eventName, callback) {
-    this._ensureConnected();
-    this.connection.on(eventName, callback);
+  _ensureNotificationConnected() {
+    if (!this.notificationConnection) throw new Error('NotificationHub not connected');
   }
 
   /** @private */
-  _off(eventName) {
-    if (this.connection) this.connection.off(eventName);
+  _ensureAlertConnected() {
+    if (!this.alertConnection) throw new Error('AlertHub not connected');
   }
 
+  // MonitoringHub events
   onMetricsUpdated(callback) {
-    this._on('MetricsUpdated', callback);
+    this._ensureMonitoringConnected();
+    this.monitoringConnection.on('MetricsUpdated', callback);
   }
   offMetricsUpdated() {
-    this._off('MetricsUpdated');
+    if (this.monitoringConnection) this.monitoringConnection.off('MetricsUpdated');
   }
 
   onWatchlistMetricsUpdated(callback) {
-    this._on('WatchlistMetricsUpdated', callback);
+    this._ensureMonitoringConnected();
+    this.monitoringConnection.on('WatchlistMetricsUpdated', callback);
   }
   offWatchlistMetricsUpdated() {
-    this._off('WatchlistMetricsUpdated');
+    if (this.monitoringConnection) this.monitoringConnection.off('WatchlistMetricsUpdated');
+  }
+
+  // NotificationHub events
+  onBackupCompleted(callback) {
+    this._ensureNotificationConnected();
+    this.notificationConnection.on('BackupCompleted', callback);
+  }
+  offBackupCompleted() {
+    if (this.notificationConnection) this.notificationConnection.off('BackupCompleted');
+  }
+
+  onIntegrityCheckCompleted(callback) {
+    this._ensureNotificationConnected();
+    this.notificationConnection.on('IntegrityCheckCompleted', callback);
+  }
+  offIntegrityCheckCompleted() {
+    if (this.notificationConnection) this.notificationConnection.off('IntegrityCheckCompleted');
   }
 
   onCommandSuccess(callback) {
-    this._on('CommandSuccess', callback);
+    this._ensureNotificationConnected();
+    this.notificationConnection.on('CommandSuccess', callback);
   }
   offCommandSuccess() {
-    this._off('CommandSuccess');
+    if (this.notificationConnection) this.notificationConnection.off('CommandSuccess');
   }
 
   onCommandFailed(callback) {
-    this._on('CommandFailed', callback);
+    this._ensureNotificationConnected();
+    this.notificationConnection.on('CommandFailed', callback);
   }
   offCommandFailed() {
-    this._off('CommandFailed');
+    if (this.notificationConnection) this.notificationConnection.off('CommandFailed');
   }
 
+  // AlertHub events
   onAlertTriggered(callback) {
-    this._on('AlertTriggered', callback);
+    this._ensureAlertConnected();
+    this.alertConnection.on('AlertTriggered', callback);
   }
   offAlertTriggered() {
-    this._off('AlertTriggered');
+    if (this.alertConnection) this.alertConnection.off('AlertTriggered');
   }
 
-  // Backup events (v2.1 / Dec 2025)
-  onBackupCompleted(callback) {
-    this._on('BackupCompleted', callback);
+  onServiceRestartAttempted(callback) {
+    this._ensureAlertConnected();
+    this.alertConnection.on('ServiceRestartAttempted', callback);
   }
-  offBackupCompleted() {
-    this._off('BackupCompleted');
-  }
-
-  removeAllListeners() {
-    if (!this.connection) return;
-    [
-      'MetricsUpdated',
-      'WatchlistMetricsUpdated',
-      'CommandSuccess',
-      'CommandFailed',
-      'AlertTriggered',
-      'BackupCompleted',
-    ].forEach((ev) => this.connection.off(ev));
+  offServiceRestartAttempted() {
+    if (this.alertConnection) this.alertConnection.off('ServiceRestartAttempted');
   }
 }
 

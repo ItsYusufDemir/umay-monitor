@@ -141,8 +141,6 @@ const SpeedGauge = ({ label, value, max }) => {
 };
 
 const MetricsOverview = ({ metrics, history }) => {
-  const [disksExpanded, setDisksExpanded] = useState(false);
-
   const last = metrics;
   if (!last) return <div>No metrics yet. Select a server to start streaming.</div>;
 
@@ -202,11 +200,6 @@ const MetricsOverview = ({ metrics, history }) => {
 
   const nlLast = last.normalizedLoad || {};
 
-  // ✅ collapse/expand logic
-  const DISKS_COLLAPSE_COUNT = 2;
-  const visibleDisks = disksExpanded ? disks : disks.slice(0, DISKS_COLLAPSE_COUNT);
-  const canToggleDisks = disks.length > DISKS_COLLAPSE_COUNT;
-
   return (
     <div className="metrics-grid">
       {/* CPU */}
@@ -232,20 +225,73 @@ const MetricsOverview = ({ metrics, history }) => {
         {primaryIface ? (
           <>
             <p className="metric-subtitle">Primary: {primaryIface.name}</p>
-            {/* Speed gauges (shown above IPs) */}
-            <div className="net-speed-gauges">
-              <SpeedGauge
-                label="Download"
-                value={primaryIface.downloadSpeedMbps}
-                max={autoSpeedMax(Math.max(primaryIface.downloadSpeedMbps || 0, primaryIface.uploadSpeedMbps || 0))}
-              />
-              <SpeedGauge
-                label="Upload"
-                value={primaryIface.uploadSpeedMbps}
-                max={autoSpeedMax(Math.max(primaryIface.downloadSpeedMbps || 0, primaryIface.uploadSpeedMbps || 0))}
-              />
+            {/* Speed gauges side by side */}
+            <div style={{ display: 'flex', gap: 20, justifyContent: 'center', marginTop: 10 }}>
+              <div style={{ position: 'relative', height: 140, flex: 1 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <RadialBarChart 
+                    data={[{ name: 'Download', value: Math.min(100, (primaryIface.downloadSpeedMbps || 0) * 10) }]} 
+                    innerRadius="70%" 
+                    outerRadius="100%" 
+                    startAngle={180} 
+                    endAngle={0}
+                  >
+                    <PolarAngleAxis type="number" domain={[0, 100]} tick={false} />
+                    <RadialBar dataKey="value" fill="#3b82f6" background={{ fill: '#1f2937' }} cornerRadius={10} />
+                  </RadialBarChart>
+                </ResponsiveContainer>
+                <div
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexDirection: 'column',
+                    pointerEvents: 'none',
+                  }}
+                >
+                  <div style={{ fontSize: 11, color: '#9ca3af' }}>Download</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: '#e5e7eb' }}>
+                    {fmt(primaryIface.downloadSpeedMbps, 2)}
+                  </div>
+                  <div style={{ fontSize: 10, color: '#9ca3af' }}>Mbps</div>
+                </div>
+              </div>
+              
+              <div style={{ position: 'relative', height: 140, flex: 1 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <RadialBarChart 
+                    data={[{ name: 'Upload', value: Math.min(100, (primaryIface.uploadSpeedMbps || 0) * 10) }]} 
+                    innerRadius="70%" 
+                    outerRadius="100%" 
+                    startAngle={180} 
+                    endAngle={0}
+                  >
+                    <PolarAngleAxis type="number" domain={[0, 100]} tick={false} />
+                    <RadialBar dataKey="value" fill="#f59e0b" background={{ fill: '#1f2937' }} cornerRadius={10} />
+                  </RadialBarChart>
+                </ResponsiveContainer>
+                <div
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexDirection: 'column',
+                    pointerEvents: 'none',
+                  }}
+                >
+                  <div style={{ fontSize: 11, color: '#9ca3af' }}>Upload</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: '#e5e7eb' }}>
+                    {fmt(primaryIface.uploadSpeedMbps, 2)}
+                  </div>
+                  <div style={{ fontSize: 10, color: '#9ca3af' }}>Mbps</div>
+                </div>
+              </div>
             </div>
-            <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
               <span className="badge badge-muted">IPv4: {primaryIface.ipv4 || '—'}</span>
               <span className="badge badge-muted">IPv6: {primaryIface.ipv6 || '—'}</span>
             </div>
@@ -270,6 +316,24 @@ const MetricsOverview = ({ metrics, history }) => {
         </div>
       </section>
 
+      {/* Disk usage percent per mount */}
+      <section className="metric-card">
+        <h2>Disk Usage %</h2>
+        {diskPercentBars.length ? (
+          <ResponsiveContainer width="100%" height={260}>
+            <BarChart data={diskPercentBars}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="mount" />
+              <YAxis domain={[0, 100]} unit="%" />
+              <Tooltip content={<DarkTooltip />} />
+              <Legend />
+              <Bar dataKey="usagePercent" name="Usage %" fill="#f59e0b" />
+            </BarChart>
+          </ResponsiveContainer>
+        ) : (
+          <p>No disk data</p>
+        )}
+      </section>
 
       
       {/* CPU/RAM history */}
@@ -418,44 +482,13 @@ const MetricsOverview = ({ metrics, history }) => {
         </div>
       </section>
 
-{/* Disk usage percent per mount */}
-      <section className="metric-card">
-        <h2>Disk Usage %</h2>
-        {diskPercentBars.length ? (
-          <ResponsiveContainer width="100%" height={260}>
-            <BarChart data={diskPercentBars}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="mount" />
-              <YAxis domain={[0, 100]} unit="%" />
-              <Tooltip content={<DarkTooltip />} />
-              <Legend />
-              <Bar dataKey="usagePercent" name="Usage %" fill="#f59e0b" />
-            </BarChart>
-          </ResponsiveContainer>
-        ) : (
-          <p>No disk data</p>
-        )}
-      </section>
-
-      {/* ✅ Disks (no horizontal scroll) + collapse/expand */}
-      <section className="metric-card">
-        <div className="action-row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
-          <h2 style={{ margin: 0 }}>Disks</h2>
-
-          {canToggleDisks ? (
-            <button
-              className="btn btn-muted"
-              onClick={() => setDisksExpanded((v) => !v)}
-              title={disksExpanded ? 'Collapse disks' : 'Show all disks'}
-            >
-              {disksExpanded ? 'Collapse' : `Show all (${disks.length})`}
-            </button>
-          ) : null}
-        </div>
+      {/* Disks */}
+      <section className="metric-card full-span">
+        <h2>Disks</h2>
 
         {disks.length ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10, overflowX: 'hidden' }}>
-            {visibleDisks.map((d) => {
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 10, marginTop: 10 }}>
+            {disks.map((d) => {
               const usage = Math.max(0, Math.min(100, Number(d.usagePercent) || 0));
               const used = Number(d.usedGB) || 0;
               const total = Number(d.totalGB) || 0;
@@ -546,58 +579,79 @@ const MetricsOverview = ({ metrics, history }) => {
                 </div>
               );
             })}
-
-            {canToggleDisks && !disksExpanded ? (
-              <div className="small" style={{ color: '#9ca3af', marginTop: 2 }}>
-                Showing {DISKS_COLLAPSE_COUNT} of {disks.length} disks.
-              </div>
-            ) : null}
           </div>
         ) : (
           <p>No disk data</p>
         )}
       </section>
 
-      
-
-      {/* Network interfaces table */}
+      {/* Network interfaces */}
       <section className="metric-card full-span">
         <h2>Network Interfaces</h2>
-        <div className="table-wrap" style={{ maxHeight: 360 }}>
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>IPv4</th>
-                <th>IPv6</th>
-                <th>MAC</th>
-                <th>Down Mbps</th>
-                <th>Up Mbps</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(last.networkInterfaces || []).map((n) => (
-                <tr key={n.name}>
-                  <td>{n.name}</td>
-                  <td>{n.ipv4 || '—'}</td>
-                  <td
-                    style={{
-                      maxWidth: 280,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {n.ipv6 || '—'}
-                  </td>
-                  <td>{n.mac || '—'}</td>
-                  <td>{fmt(n.downloadSpeedMbps, 3)}</td>
-                  <td>{fmt(n.uploadSpeedMbps, 3)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        {(last.networkInterfaces || []).length ? (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 12, marginTop: 10 }}>
+            {(last.networkInterfaces || []).map((n) => (
+              <div
+                key={n.name}
+                style={{
+                  border: '1px solid #1f2937',
+                  borderRadius: 12,
+                  padding: 14,
+                  background: '#0b1220',
+                }}
+              >
+                {/* Interface name and speeds */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                  <div style={{ fontWeight: 650, fontSize: 16, color: '#e5e7eb' }}>
+                    {n.name}
+                  </div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <span className="badge" style={{ background: '#3b82f6', color: '#fff', fontSize: 11 }}>
+                      ↓ {fmt(n.downloadSpeedMbps, 2)} Mbps
+                    </span>
+                    <span className="badge" style={{ background: '#f59e0b', color: '#000', fontSize: 11 }}>
+                      ↑ {fmt(n.uploadSpeedMbps, 2)} Mbps
+                    </span>
+                  </div>
+                </div>
+
+                {/* IP addresses */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 12, color: '#9ca3af', minWidth: 50 }}>IPv4:</span>
+                    <span style={{ fontSize: 13, color: '#e5e7eb', fontFamily: 'monospace' }}>
+                      {n.ipv4 || '—'}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 12, color: '#9ca3af', minWidth: 50 }}>IPv6:</span>
+                    <span 
+                      style={{ 
+                        fontSize: 12, 
+                        color: '#e5e7eb', 
+                        fontFamily: 'monospace',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                      }}
+                      title={n.ipv6 || '—'}
+                    >
+                      {n.ipv6 || '—'}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 12, color: '#9ca3af', minWidth: 50 }}>MAC:</span>
+                    <span style={{ fontSize: 13, color: '#e5e7eb', fontFamily: 'monospace' }}>
+                      {n.macAddress || n.mac || '—'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p>No network interfaces</p>
+        )}
       </section>
 
       

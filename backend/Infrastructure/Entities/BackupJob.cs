@@ -52,9 +52,9 @@ public class BackupJob
     public bool IsActive { get; set; } = true;
     
     /// <summary>
-    /// Status of the last backup execution (success, error, pending)
+    /// Status of the last backup execution (running, success, error)
     /// </summary>
-    public string LastRunStatus { get; set; } = "pending";
+    public string LastRunStatus { get; set; } = "success";
     
     /// <summary>
     /// Timestamp of the last backup execution

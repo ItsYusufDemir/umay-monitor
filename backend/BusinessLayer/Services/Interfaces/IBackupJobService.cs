@@ -50,12 +50,22 @@ public interface IBackupJobService
     /// <summary>
     /// Creates a new backup log entry
     /// </summary>
-    Task<BackupLogDto> CreateBackupLogAsync(Guid jobId, Guid taskId, string status, 
-        string? snapshotId = null, int? filesNew = null, long? dataAdded = null, 
-        double? durationSeconds = null, string? errorMessage = null);
+    Task<BackupLogDto> CreateBackupLogAsync(Guid jobId, Guid taskId, string status,
+        string? message = null, string? snapshotId = null, int? filesNew = null, 
+        long? dataAdded = null, double? durationSeconds = null, string? errorMessage = null);
     
     /// <summary>
     /// Updates backup job status after execution
     /// </summary>
     Task UpdateJobStatusAsync(Guid jobId, string status);
+    
+    /// <summary>
+    /// Gets real snapshots from Restic repository via agent
+    /// </summary>
+    Task<List<BackupSnapshotDto>> GetSnapshotsFromAgentAsync(Guid jobId);
+    
+    /// <summary>
+    /// Triggers an integrity check for a backup job's repository
+    /// </summary>
+    Task<Guid> TriggerIntegrityCheckAsync(Guid jobId);
 }

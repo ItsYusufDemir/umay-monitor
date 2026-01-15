@@ -143,8 +143,9 @@
 
 | Layer | Technology |
 |-------|------------|
-| **Frontend** | React 18, SignalR Client |
-| **Backend** | ASP.NET Core 8.0, SignalR |
+| **Frontend** | React 18 |
+| **Backend** | ASP.NET Core 8.0 |
+| **Agent** | Python 3 |
 | **Database** | PostgreSQL 16 |
 | **Deployment** | Docker & Docker Compose |
 
@@ -252,9 +253,28 @@ This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) 
 **Marmara University - Computer Engineering**  
 *Engineering Project*
 
-| | | |
-|:---:|:---:|:---:|
-| **Yasin Küçük** | **Yusuf Demir** | **Yusuf Duman** |
+<table>
+<tr>
+<td align="center">
+<a href="https://github.com/yasinkucukk">
+<img src="https://github.com/yasinkucukk.png" width="100px;" alt="Yasin Küçük"/><br />
+<sub><b>Yasin Küçük</b></sub>
+</a>
+</td>
+<td align="center">
+<a href="https://github.com/ItsYusufDemir">
+<img src="https://github.com/ItsYusufDemir.png" width="100px;" alt="Yusuf Demir"/><br />
+<sub><b>Yusuf Demir</b></sub>
+</a>
+</td>
+<td align="center">
+<a href="https://github.com/yusufdmn">
+<img src="https://github.com/yusufdmn.png" width="100px;" alt="Yusuf Duman"/><br />
+<sub><b>Yusuf Duman</b></sub>
+</a>
+</td>
+</tr>
+</table>
 
 *Supervisor: Assoc. Prof. Ömer Korçak*
 

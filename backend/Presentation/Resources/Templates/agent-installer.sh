@@ -8,10 +8,11 @@ DOMAIN="{{DOMAIN}}"
 
 # --- DYNAMIC PROTOCOL SELECTION ---
 # Agent always uses ws:// and http:// (nginx handles SSL if needed)
-if [[ "$DOMAIN" == "localhost" || "$DOMAIN" == "127.0.0.1" || "$DOMAIN" == localhost:* ]]; then
+# DOMAIN already contains the port if one was present in the request (e.g., localhost:5123)
+if [[ "$DOMAIN" == "localhost" || "$DOMAIN" == "127.0.0.1" || "$DOMAIN" == localhost:* || "$DOMAIN" == 127.0.0.1:* ]]; then
     echo "🔧 Detected Localhost Environment."
-    DEB_URL="http://${DOMAIN}:5123/downloads/super-agent_amd64.deb"
-    WS_URI="ws://${DOMAIN}:5123"
+    DEB_URL="http://${DOMAIN}/downloads/super-agent_amd64.deb"
+    WS_URI="ws://${DOMAIN}"
 else
     echo "☁️ Detected Public Environment."
     # Always use ws:// - nginx/apache handles SSL termination

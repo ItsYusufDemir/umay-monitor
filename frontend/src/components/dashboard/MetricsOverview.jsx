@@ -51,14 +51,39 @@ const humanUptime = (sec) => {
 };
 
 const pickPrimaryIface = (ifs) => {
-  const list = Array.isArray(ifs) ? ifs : [];
-  const eth0 = list.find((x) => x.name === 'eth0');
-  if (eth0) return eth0;
-  const withIpv4 = list.find((x) => x.ipv4);
-  if (withIpv4) return withIpv4;
-  const nonLo = list.find((x) => x.name && x.name !== 'lo');
-  if (nonLo) return nonLo;
-  return list[0] || null;
+  if (!Array.isArray(ifs) || ifs.length === 0) return null;
+  
+  // Blacklist: interfaces we never want as primary
+  const blacklist = ['lo', 'docker', 'br-', 'veth', 'virbr', 'vnet'];
+  const isBlacklisted = (name) => blacklist.some((b) => name === b || name.startsWith(b));
+  
+  // Get only real physical interfaces
+  const physical = ifs.filter((x) => x.name && !isBlacklisted(x.name));
+  
+  // Best choice: physical interface with a real routable IPv4 (not 127.*, 172.17-31.*, 10.*)
+  const withRoutableIp = physical.find((x) => {
+    if (!x.ipv4) return false;
+    if (x.ipv4.startsWith('127.')) return false;
+    if (x.ipv4.startsWith('172.')) return false; // Docker networks
+    if (x.ipv4.startsWith('10.')) return false;  // VPN/private
+    return true;
+  });
+  if (withRoutableIp) return withRoutableIp;
+  
+  // Second choice: any physical interface with any IPv4 (except 127.*)
+  const withAnyIp = physical.find((x) => x.ipv4 && !x.ipv4.startsWith('127.'));
+  if (withAnyIp) return withAnyIp;
+  
+  // Third choice: known physical interface pattern (wlan, wlo, eth, enp, ens)
+  const knownPattern = physical.find((x) => /^(wlan|wlo|wlp|eth|enp|ens)/.test(x.name));
+  if (knownPattern) return knownPattern;
+  
+  // Fourth: any physical interface
+  if (physical.length > 0) return physical[0];
+  
+  // Last resort: first non-lo interface from original list
+  const nonLo = ifs.find((x) => x.name !== 'lo');
+  return nonLo || ifs[0];
 };
 
 /* ---------- Gauge ---------- */

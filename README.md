@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🛡️ Umay Monitor
+<img src="docs/images/logo.png" alt="Umay Monitor" width="300">
 
 ### Lightweight Server Monitoring with Real-Time Metrics, Auto-Recovery & Backup Management
 
@@ -11,7 +11,7 @@
 
 *A simple, lightweight alternative to Nagios and Zabbix for small-to-medium infrastructures.*
 
-**🚀 Agent installs in under 30 seconds • 💨 Uses only ~1% CPU & ~40MB RAM**
+**🚀 Agent installs in under 30 seconds • 💨 Agent uses only ~1% CPU & ~40MB RAM**
 
 [Screenshots](#-screenshots) • [Features](#-features) • [Installation](#-installation) • [Contributing](#-contributing)
 

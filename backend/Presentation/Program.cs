@@ -149,12 +149,10 @@ builder.Services.AddSwaggerGen(options =>
 });
 builder.Services.AddServices(builder.Configuration);
 
-
-
-
-
-// 1. Get the domain from Docker (or default to localhost:3000)
-var allowedOrigin = Environment.GetEnvironmentVariable("ALLOWED_ORIGINS") ?? "http://localhost:3000";
+// Get allowed origins from environment variable (comma-separated for multiple origins)
+// Example: "https://monitor.example.com,https://admin.example.com"
+var allowedOriginsEnv = Environment.GetEnvironmentVariable("ALLOWED_ORIGINS") ?? "http://localhost:3000";
+var allowedOrigins = allowedOriginsEnv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
 builder.Services.AddCors(options =>
 {
@@ -167,10 +165,10 @@ builder.Services.AddCors(options =>
               .AllowCredentials();
     });
 
-    // Policy for Production (Docker) - Allowing everything for testing
+    // Policy for Production (Docker) - Only allow configured origins
     options.AddPolicy("ProductionPolicy", policy =>
     {
-        policy.SetIsOriginAllowed(_ => true)
+        policy.WithOrigins(allowedOrigins)
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials();
